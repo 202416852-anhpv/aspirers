@@ -1,16 +1,23 @@
 """
-compliance_checker/engine/opencv_modules.py — 2 nhóm hàm khác trạng thái:
+compliance_checker/engine/opencv_modules.py — 3 nhóm hàm khác trạng thái:
 
   1. PLACEHOLDER (match_character, match_logo, extract_fonts): cần embedding/model + ảnh
      reference thật (anime_character_refs/, logo_refs/) — nhóm đã QUYẾT ĐỊNH BỎ hướng này
      (quá khó trong thời gian hackathon, xem ghi chú trong từng hàm). KHÔNG tự ý code lại
      thuật toán bên trong 3 hàm này — giữ nguyên đúng contract shape của CLAUDE.md mục 3 để
      orchestrator.py vẫn gọi được, luôn trả rỗng.
-  2. ĐANG HOẠT ĐỘNG THẬT (detect_text_regions): thay thế hướng trên bằng 1 kỹ thuật OpenCV
-     cổ điển đơn giản hơn nhiều — KHÔNG cần model/dataset/ảnh reference, chỉ dùng MSER +
-     morphological dilation + contour để khoanh vùng CÓ KHẢ NĂNG chứa chữ trên ảnh. Dùng để
-     vẽ toạ độ thật lên giao diện thay cho mô tả grid 3x3 bằng lời (xem orchestrator.py +
-     frontend/app.js).
+  2. ĐANG HOẠT ĐỘNG THẬT (detect_text_regions): thay thế hướng match_character/match_logo
+     bằng 1 kỹ thuật OpenCV cổ điển đơn giản hơn nhiều — KHÔNG cần model/dataset/ảnh
+     reference, chỉ dùng MSER + morphological dilation + contour để khoanh vùng CÓ KHẢ NĂNG
+     chứa chữ trên ảnh. Dùng để vẽ toạ độ thật lên giao diện thay cho mô tả grid 3x3 bằng lời
+     (xem orchestrator.py + frontend/app.js).
+  3. ĐANG HOẠT ĐỘNG THẬT (detect_and_crop_faces, 2026-08-21): dùng model BlazeFace short-range
+     (do người dùng tự thêm vào data/models/, xem manifest.json ở đó) để KHOANH VÙNG + CẮT mọi
+     khuôn mặt trong ảnh — đây CHỈ là face DETECTION (tìm "có mặt người ở đâu"), KHÔNG phải
+     face-recognition/embedding sinh trắc học nào. Ảnh mặt cắt ra được gửi cho Agent 2
+     (Claude Vision) tự nhận diện trực tiếp — xem agents.py::run_agent2_verify_candidates.
+     Toàn bộ threshold/config port NGUYÊN VẸN từ script gốc người dùng cung cấp
+     (crop_face_blazeface.py, đã tự fine-tune trên nhiều ảnh thật) — KHÔNG chỉnh lại số.
 
 Nguyên tắc chung mọi hàm trong file: nhận image_path (string), trả dict JSON-serializable,
 KHÔNG BAO GIỜ raise exception ra ngoài (đọc ảnh lỗi/thiếu file vẫn trả rỗng đúng shape).
@@ -18,6 +25,7 @@ KHÔNG BAO GIỜ raise exception ra ngoài (đọc ảnh lỗi/thiếu file vẫ
 pip install opencv-contrib-python numpy (đã có sẵn trong hệ thống hiện tại)
 """
 
+import base64
 import os
 
 try:
@@ -170,3 +178,280 @@ def detect_text_regions(image_path: str, max_regions: int = 5) -> dict:
         return {"text_regions": out}
     except Exception:
         return {"text_regions": []}
+
+
+# =====================================================================
+# FACE DETECTION (BlazeFace) — 2026-08-21, port NGUYÊN VẸN từ crop_face_blazeface.py
+# (script do người dùng tự viết/fine-tune, cung cấp cùng model). Toàn bộ hằng số/thuật
+# toán bên dưới GIỮ Y HỆT bản gốc — chỉ đổi input (file path -> image path đã có sẵn trong
+# pipeline) và output (ghi file .jpg -> base64 string để gửi thẳng cho Agent 2 qua Vision).
+# =====================================================================
+
+_FACE_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "models", "blaze_face_short_range.tflite")
+_FACE_INPUT_SIZE = 128  # BlazeFace short range nhận input 128x128
+
+# Đã fine-tune bằng cách đo phân bố điểm tin cậy trên nhiều ảnh thật (ảnh 1-2 người lẫn ảnh
+# đông người) — mặt thật luôn >= 0.83, box rác (hoạ tiết/nền/vật thể) rơi vào khoảng 0.5-0.68.
+_FACE_SCORE_THRESH = 0.7
+_FACE_IOU_THRESH = 0.3            # ngưỡng NMS (gộp box trùng nhau trong 1 window)
+_FACE_GLOBAL_IOU_THRESH = 0.3     # ngưỡng NMS toàn cục (gộp box trùng từ nhiều window)
+_FACE_MARGIN = 0.2                # nở rộng box thêm 20% mỗi cạnh cho dễ crop đẹp hơn
+
+# Multi-scale tiling — BlazeFace short-range chỉ được train cho mặt lớn/gần camera, quét
+# nhiều "cửa sổ" ở nhiều tỷ lệ chồng lấn để bắt được cả mặt nhỏ (ảnh đông người).
+_FACE_WINDOW_SCALES = (1.0, 0.6, 0.4, 0.27, 0.18)
+_FACE_WINDOW_OVERLAP = 0.5
+_FACE_MIN_WINDOW_PX = 60
+
+_FACE_MAX_CROPS = 5          # top N mặt điểm cao nhất gửi cho Agent 2 (kiểm soát chi phí/kích thước request)
+_FACE_UPSCALE_MIN_SIDE = 160  # crop nhỏ hơn cạnh này (thường gặp, mặt xa) -> phóng to trước khi encode,
+                              # giúp Agent 2 nhận diện dễ hơn — CHỈ ảnh hưởng bước encode, KHÔNG ảnh
+                              # hưởng gì tới bbox/score/threshold detect (giữ nguyên như script gốc).
+
+_FACE_NET_CACHE = None   # lazy-load 1 lần cho cả process, tránh đọc lại model từ đĩa mỗi lần gọi
+_FACE_NET_LOAD_FAILED = False
+
+
+def _get_face_net():
+    global _FACE_NET_CACHE, _FACE_NET_LOAD_FAILED
+    if _FACE_NET_CACHE is not None or _FACE_NET_LOAD_FAILED:
+        return _FACE_NET_CACHE
+    try:
+        _FACE_NET_CACHE = cv2.dnn.readNetFromTFLite(_FACE_MODEL_PATH)
+    except Exception:
+        _FACE_NET_LOAD_FAILED = True
+        _FACE_NET_CACHE = None
+    return _FACE_NET_CACHE
+
+
+def _face_generate_anchors(input_size=128, strides=(8, 16, 16, 16)):
+    """Sinh anchor (x_center, y_center) chuẩn hoá [0,1] đúng cấu hình của BlazeFace short
+    range (fixed_anchor_size=True, aspect_ratios=[1.0] + 1 interpolated scale => 2 anchor/vị trí)."""
+    anchors = []
+    layer_id = 0
+    while layer_id < len(strides):
+        last_same_stride = layer_id
+        repeats = 0
+        while (last_same_stride < len(strides) and
+               strides[last_same_stride] == strides[layer_id]):
+            last_same_stride += 1
+            repeats += 2  # 1 aspect ratio + 1 interpolated scale
+        stride = strides[layer_id]
+        feat = input_size // stride
+        for y in range(feat):
+            for x in range(feat):
+                x_center = (x + 0.5) / feat
+                y_center = (y + 0.5) / feat
+                for _ in range(repeats):
+                    anchors.append((x_center, y_center))
+        layer_id = last_same_stride
+    return np.array(anchors, dtype=np.float32)  # (N, 2)
+
+
+_FACE_ANCHORS = None  # lazy-init cùng lúc với net (tránh tính numpy khi chưa chắc cv2 sẵn sàng)
+
+
+def _face_letterbox(image, size=128):
+    """Resize giữ tỷ lệ rồi pad thành hình vuông size x size (pad giữa)."""
+    h, w = image.shape[:2]
+    scale = size / max(h, w)
+    new_w, new_h = int(round(w * scale)), int(round(h * scale))
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    pad_w, pad_h = size - new_w, size - new_h
+    top, bottom = pad_h // 2, pad_h - pad_h // 2
+    left, right = pad_w // 2, pad_w - pad_w // 2
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right,
+                                 cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    return padded, scale, left, top
+
+
+def _face_decode_boxes(regressors, anchors, input_size=128):
+    """Giải mã 16 giá trị regressor (4 box + 6 keypoint*2) theo anchor.
+    Trả về boxes chuẩn hoá [0,1]: (xmin, ymin, xmax, ymax)."""
+    reg = regressors[0]  # (896, 16)
+    dx, dy, dw, dh = reg[:, 0], reg[:, 1], reg[:, 2], reg[:, 3]
+
+    anchor_x, anchor_y = anchors[:, 0], anchors[:, 1]
+
+    x_center = dx / input_size + anchor_x
+    y_center = dy / input_size + anchor_y
+    w = dw / input_size
+    h = dh / input_size
+
+    xmin = x_center - w / 2
+    ymin = y_center - h / 2
+    xmax = x_center + w / 2
+    ymax = y_center + h / 2
+    return np.stack([xmin, ymin, xmax, ymax], axis=1)
+
+
+def _face_detect_in_region(region, net, anchors):
+    """Chạy BlazeFace trên 1 vùng ảnh (region), trả về box theo toạ độ CỦA CHÍNH VÙNG ĐÓ
+    (chưa cộng offset), đã NMS trong phạm vi region."""
+    padded, scale, pad_x, pad_y = _face_letterbox(region, _FACE_INPUT_SIZE)
+
+    rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32)
+    rgb = (rgb - 127.5) / 127.5
+    blob = cv2.dnn.blobFromImage(rgb)  # -> (1, 3, 128, 128)
+
+    net.setInput(blob)
+    classificators, regressors = net.forward(["classificators", "regressors"])
+
+    scores = classificators[0, :, 0]
+    scores = np.clip(scores, -30, 30)  # giới hạn trước sigmoid để tránh tràn số
+    scores = 1.0 / (1.0 + np.exp(-scores))
+
+    keep = scores > _FACE_SCORE_THRESH
+    if not np.any(keep):
+        return []
+
+    boxes_norm = _face_decode_boxes(regressors, anchors, _FACE_INPUT_SIZE)[keep]
+    scores_kept = scores[keep]
+
+    boxes_px = (boxes_norm * _FACE_INPUT_SIZE).astype(np.float32)
+    nms_boxes = [[x1, y1, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes_px]
+    idxs = cv2.dnn.NMSBoxes(nms_boxes, scores_kept.tolist(), _FACE_SCORE_THRESH, _FACE_IOU_THRESH)
+    if len(idxs) == 0:
+        return []
+    idxs = np.array(idxs).flatten()
+
+    h_reg, w_reg = region.shape[:2]
+    results = []
+    for i in idxs:
+        x1, y1, x2, y2 = boxes_px[i]
+        x1 = (x1 - pad_x) / scale
+        y1 = (y1 - pad_y) / scale
+        x2 = (x2 - pad_x) / scale
+        y2 = (y2 - pad_y) / scale
+
+        x1 = max(0.0, x1); y1 = max(0.0, y1)
+        x2 = min(float(w_reg), x2); y2 = min(float(h_reg), y2)
+        if x2 > x1 and y2 > y1:
+            results.append((x1, y1, x2, y2, float(scores_kept[i])))
+    return results
+
+
+def _face_generate_windows(h, w):
+    """Sinh các cửa sổ vuông, chồng lấn, ở nhiều tỷ lệ (_FACE_WINDOW_SCALES) để phủ hết
+    ảnh -> giúp bắt được cả mặt lớn lẫn mặt nhỏ."""
+    short_side = min(h, w)
+    seen = set()
+    for scale in _FACE_WINDOW_SCALES:
+        size = int(round(short_side * scale))
+        size = min(size, h, w)
+        if size < _FACE_MIN_WINDOW_PX:
+            continue
+        stride = max(1, int(round(size * (1 - _FACE_WINDOW_OVERLAP))))
+
+        def positions(total, size, stride):
+            if size >= total:
+                return [0]
+            pos = list(range(0, total - size + 1, stride))
+            if pos[-1] != total - size:
+                pos.append(total - size)
+            return pos
+
+        for y0 in positions(h, size, stride):
+            for x0 in positions(w, size, stride):
+                key = (x0, y0, size)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield x0, y0, size, size
+
+
+def _face_detect_all(image, net, anchors):
+    """Quét đa tỷ lệ trên toàn ảnh, gộp tất cả box lại rồi NMS toàn cục.
+    Trả về list (x1, y1, x2, y2, score) theo toạ độ ảnh gốc."""
+    h_orig, w_orig = image.shape[:2]
+
+    all_boxes = []
+    all_scores = []
+    for x0, y0, win_w, win_h in _face_generate_windows(h_orig, w_orig):
+        region = image[y0:y0 + win_h, x0:x0 + win_w]
+        for x1, y1, x2, y2, score in _face_detect_in_region(region, net, anchors):
+            all_boxes.append([x0 + x1, y0 + y1, x2 - x1, y2 - y1])  # xywh
+            all_scores.append(score)
+
+    if not all_boxes:
+        return []
+
+    idxs = cv2.dnn.NMSBoxes(all_boxes, all_scores, _FACE_SCORE_THRESH, _FACE_GLOBAL_IOU_THRESH)
+    if len(idxs) == 0:
+        return []
+    idxs = np.array(idxs).flatten()
+
+    results = []
+    for i in idxs:
+        x, y, bw, bh = all_boxes[i]
+        x1, y1, x2, y2 = x, y, x + bw, y + bh
+
+        x1 -= bw * _FACE_MARGIN / 2
+        y1 -= bh * _FACE_MARGIN / 2
+        x2 += bw * _FACE_MARGIN / 2
+        y2 += bh * _FACE_MARGIN / 2
+
+        x1 = int(max(0, x1)); y1 = int(max(0, y1))
+        x2 = int(min(w_orig, x2)); y2 = int(min(h_orig, y2))
+        if x2 > x1 and y2 > y1:
+            results.append((x1, y1, x2, y2, float(all_scores[i])))
+    return results
+
+
+def detect_and_crop_faces(image_path: str, max_faces: int = _FACE_MAX_CROPS) -> dict:
+    """
+    Output: {"faces": [{"face_base64": str, "bbox_norm": [x0,y0,x1,y1], "detection_score": float}, ...]}
+    Tối đa max_faces phần tử (mặc định 5), sắp xếp detection_score giảm dần. Ảnh lỗi/không
+    đọc được/model chưa sẵn sàng/không phát hiện mặt nào: {"faces": []}.
+
+    face_base64: JPEG của VÙNG ĐÃ CẮT (không phải cả ảnh) — nếu crop nhỏ hơn
+    _FACE_UPSCALE_MIN_SIDE thì phóng to trước khi encode (CHỈ ảnh hưởng bước gửi cho Agent 2
+    nhận diện, KHÔNG ảnh hưởng bbox/score/threshold — các số đó giữ nguyên như script gốc).
+    bbox_norm: [x0,y0,x1,y1] normalize 0-1 theo ảnh GỐC (chưa crop) — để frontend vẽ overlay
+    nếu cần, cùng shape với text_regions/positioning_notes.bbox_norm.
+    detection_score: độ tin cậy CÓ-PHẢI-MẶT-NGƯỜI của BlazeFace (0-1) — chỉ dùng nội bộ để
+    sắp xếp/chọn top N, KHÔNG phải độ tin cậy nhận diện DANH TÍNH (đó là việc của Agent 2,
+    xem agents.py) — orchestrator.py KHÔNG đưa field này ra response cuối cùng.
+
+    ⚠️ Đây CHỈ là face DETECTION (khoanh vùng "có mặt người ở đây") — KHÔNG so khớp/embedding
+    sinh trắc học để định danh. Định danh (suspected_name) hoàn toàn do Agent 2 (Claude Vision)
+    tự nhận diện trực tiếp trên ảnh crop, theo đúng quyết định của nhóm.
+    """
+    img = _safe_imread(image_path)
+    if img is None:
+        return {"faces": []}
+    net = _get_face_net()
+    if net is None:
+        return {"faces": []}
+    try:
+        global _FACE_ANCHORS
+        if _FACE_ANCHORS is None:
+            _FACE_ANCHORS = _face_generate_anchors(_FACE_INPUT_SIZE)
+
+        h_orig, w_orig = img.shape[:2]
+        detections = _face_detect_all(img, net, _FACE_ANCHORS)
+        if not detections:
+            return {"faces": []}
+
+        detections.sort(key=lambda d: d[4], reverse=True)  # score giảm dần
+        out = []
+        for (x1, y1, x2, y2, score) in detections[:max_faces]:
+            crop = img[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            ch, cw = crop.shape[:2]
+            if min(ch, cw) < _FACE_UPSCALE_MIN_SIDE:
+                up_scale = _FACE_UPSCALE_MIN_SIDE / max(min(ch, cw), 1)
+                crop = cv2.resize(crop, (max(int(cw * up_scale), 1), max(int(ch * up_scale), 1)), interpolation=cv2.INTER_CUBIC)
+            ok, buf = cv2.imencode(".jpg", crop)
+            if not ok:
+                continue
+            out.append({
+                "face_base64": base64.b64encode(buf.tobytes()).decode("ascii"),
+                "bbox_norm": [round(x1 / w_orig, 4), round(y1 / h_orig, 4), round(x2 / w_orig, 4), round(y2 / h_orig, 4)],
+                "detection_score": round(score, 4),
+            })
+        return {"faces": out}
+    except Exception:
+        return {"faces": []}

@@ -21,7 +21,10 @@ import re
 
 import httpx
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# File này nằm ở compliance_checker/engine/ — data/ là con của compliance_checker/, cần
+# dirname() 2 lần (xem ghi chú chi tiết trong engine/agents.py cùng dòng này — bug thật đã
+# xảy ra 1 lần do quên chỗ này khi refactor thư mục).
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 _STATIC_DB_PATH = os.path.join(_DATA_DIR, "trademark_top1000.json")
 _NICE_CLASS_PATH = os.path.join(_DATA_DIR, "niche_to_nice_class.json")
 

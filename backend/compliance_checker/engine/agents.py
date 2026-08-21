@@ -29,7 +29,13 @@ except ImportError:
     def repair_json(s: str) -> str:  # fallback tối thiểu nếu chưa cài json_repair
         return s
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# File này nằm ở compliance_checker/engine/ (2 cấp dưới compliance_checker/) — data/ là
+# thư mục CON của compliance_checker/, không phải của engine/, nên cần dirname() 2 LẦN.
+# ⚠️ Bug thật đã xảy ra: refactor thư mục trước đó chỉ dùng dirname() 1 lần (đúng lúc file
+# còn nằm phẳng ở compliance_checker/), quên cập nhật khi dời vào engine/ -> mọi file data/
+# (niche_taxonomy.json, character_list.md, policies/...) load rỗng TRONG IM LẶNG (có try/except
+# fallback nên không crash, nhưng mất hết context tiêm vào prompt) — phát hiện + vá lại đây.
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
 # =====================================================================
@@ -78,13 +84,19 @@ def _to_data_uri(image_base64: str) -> str:
     return f"data:{_sniff_image_mime(image_base64)};base64,{image_base64}"
 
 
-def _build_messages(system_prompt: str, user_prompt: str, image_base64: "str | list[str] | None") -> list:
+def _build_messages(system_prompt: str, user_prompt: str, image_base64: "str | list[str] | None", labels: "list[str] | None" = None) -> list:
     """
     image_base64: 1 ảnh (str), NHIỀU ảnh (list[str] — vd mọi trang của 1 PDF nhiều trang, xem
     pdf_processor.py), hoặc None (text-only). Nhiều ảnh được gửi CÙNG 1 message (Anthropic hỗ
     trợ nhiều image content-block/message) — vẫn chỉ 1 lần gọi API, không nhân số lần gọi theo
-    số trang. Mỗi ảnh được đánh dấu "--- Trang N/M ---" bằng 1 text block ngay trước nó để model
-    biết thứ tự trang khi mô tả vị trí phát hiện (Nhóm C dùng lại thông tin này).
+    số trang. Mỗi ảnh được đánh dấu bằng 1 text block ngay trước nó để model biết thứ tự/vai
+    trò khi mô tả vị trí phát hiện (Nhóm C dùng lại thông tin này).
+
+    labels: (2026-08-21, optional) nhãn TỰ ĐỊNH NGHĨA cho từng ảnh theo đúng thứ tự trong
+    image_base64, dùng khi cần phân biệt NHIỀU LOẠI ảnh khác nhau trong CÙNG 1 message (vd
+    Agent 2 gửi ảnh thiết kế gốc + nhiều ảnh mặt đã crop — xem run_agent2_verify_candidates).
+    Không truyền -> giữ NGUYÊN hành vi cũ: nhiều ảnh không nhãn -> tự đánh "Trang N/M", 1 ảnh
+    -> không nhãn gì (backward compatible 100%).
     """
     images = image_base64 if isinstance(image_base64, list) else ([image_base64] if image_base64 else [])
     images = [img for img in images if img]  # loại None/rỗng lẫn vào list
@@ -96,7 +108,9 @@ def _build_messages(system_prompt: str, user_prompt: str, image_base64: "str | l
     content = [{"type": "text", "text": user_prompt}]
     multi = len(images) > 1
     for i, img in enumerate(images):
-        if multi:
+        if labels and i < len(labels) and labels[i]:
+            content.append({"type": "text", "text": f"--- {labels[i]} ---"})
+        elif multi:
             content.append({"type": "text", "text": f"--- Trang {i + 1}/{len(images)} ---"})
         content.append({"type": "image_url", "image_url": {"url": _to_data_uri(img)}})
     return [
@@ -111,11 +125,12 @@ def _call_llm_json(
     image_base64: "str | list[str] | None" = None,
     temperature: float = 0.3,
     max_retries: int = 2,
+    labels: "list[str] | None" = None,
 ) -> dict:
     """KHÔNG BAO GIỜ raise ra ngoài — mọi lỗi trả về {} (đúng nguyên tắc CLAUDE.md mục 10)."""
     settings = get_settings()
     client = OpenAI(api_key=settings.gemini_api_key, base_url=str(settings.gemini_base_url).rstrip("/") + "/")
-    messages = _build_messages(system_prompt, user_prompt, image_base64)
+    messages = _build_messages(system_prompt, user_prompt, image_base64, labels=labels)
 
     content = "{}"
     for attempt in range(max_retries + 1):
@@ -289,7 +304,7 @@ def run_agent1_classify(image_base64: "str | list[str]", niche_taxonomy: "dict |
 # mục — mục đích giảm false positive từ việc Agent 1 đoán rộng tay (top 5 luôn liệt kê kể cả
 # không chắc). Đây KHÔNG phải 1 lượt detect mới — prompt cấm tự thêm mục ngoài danh sách.
 
-def _build_agent2_prompt(candidates: dict) -> tuple[str, str]:
+def _build_agent2_prompt(candidates: dict, num_face_crops: int) -> tuple[str, str]:
     lines = []
     for item in candidates.get("logos", []) or []:
         name = str(item.get("brand_name", "")).strip()
@@ -305,16 +320,17 @@ def _build_agent2_prompt(candidates: dict) -> tuple[str, str]:
             lines.append(f'- category="celebrity", name="{name}"')
     candidates_text = "\n".join(lines) if lines else "(no candidates)"
 
-    system_prompt = f"""You are a Verification Specialist. A prior detector (Agent 1) examined this design image
-and produced a list of CANDIDATE items it suspects might be present — logos, copyrighted
-characters, and celebrities. Your ONLY job is to look at the image carefully and verify, for
-EACH candidate below, whether it is ACTUALLY visibly present in the image or not.
+    verify_task = ""
+    verify_shape = ""
+    if lines:
+        verify_task = f"""
+TASK 1 — VERIFY CANDIDATES: A prior detector (Agent 1) examined the design image(s) above and
+produced a list of CANDIDATE items it suspects might be present — logos, copyrighted characters,
+celebrities. Your job is to look at the design image(s) carefully and verify, for EACH candidate
+below, whether it is ACTUALLY visibly present or not.
 
-📌 If MULTIPLE images are provided (marked "--- Trang N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission — check across ALL pages.
-
-🚨 IMPORTANT: This is a VERIFICATION pass, NOT a fresh detection pass — do NOT add any item
-that is not in the candidate list below, even if you notice something else in the image. Only
-judge the exact items given.
+🚨 This is a VERIFICATION pass, NOT a fresh detection pass — do NOT add any item that is not in
+the candidate list below, even if you notice something else. Only judge the exact items given.
 
 📌 CANDIDATES TO VERIFY:
 {candidates_text}
@@ -323,43 +339,98 @@ For each candidate, decide:
 - "present": true if you can genuinely see this specific item in the image, false if you look
   carefully and it is NOT actually there (Agent 1 may have over-guessed — it is fine and
   expected to say false when in doubt, that is the whole point of this check).
-- "reasoning": one short sentence explaining your visual judgment.
+- "reasoning": one short sentence.
 
-🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only. Echo the
-"name" and "category" fields EXACTLY as given above (do not rephrase/translate/retranslate them).
+Echo the "name" and "category" fields EXACTLY as given above (do not rephrase/translate them)."""
+        verify_shape = '"verifications": [{"category": "logo", "name": "nike", "present": true, "reasoning": "The swoosh logo is clearly visible on the chest."}],'
+
+    face_task = ""
+    face_shape = ""
+    if num_face_crops > 0:
+        face_task = f"""
+
+TASK 2 — IDENTIFY FACE CROPS: after the design image(s) above, you are also shown {num_face_crops}
+CROPPED FACE image(s), each labeled "Suspected face crop #N" — extracted automatically by a face
+DETECTOR (BlazeFace) from the same design. The detector only found WHERE faces are, it has NO
+idea WHO they are. For EACH face crop (in the exact order shown), look closely and decide: do
+you recognize this specific person as a real, identifiable public figure (celebrity/athlete/
+politician/public personality/etc)?
+
+🚨 This is YOUR OWN visual judgment — you are NOT checking against any database or reference
+list. Most faces in most photos are NOT celebrities — be honest: if you do not recognize the
+person, say so (null), do NOT force a guess just to fill the field.
+
+For each face crop, output:
+- "face_index": the crop's 0-based position, matching the order shown (0 = first face crop)
+- "suspected_name": your best guess of who this is, or null if you do not recognize them
+- "confidence": "high"/"medium"/"low" — how sure you are of the identification itself (only
+  meaningful when suspected_name is not null)
+- "reasoning": one short sentence"""
+        face_shape = '"face_identifications": [{"face_index": 0, "suspected_name": "Cristiano Ronaldo", "confidence": "medium", "reasoning": "Strong facial resemblance, well-known athlete."}]'
+
+    system_prompt = f"""You are a Verification Specialist for a Print-on-Demand IP compliance system.
+{verify_task}{face_task}
+
+📌 If multiple design images are provided (marked "--- Trang N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission covering all pages.
+
+🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, no text outside it, exact keys only.
 
 REQUIRED JSON SHAPE:
 {{
-  "verifications": [
-    {{"category": "logo", "name": "nike", "present": true, "reasoning": "The swoosh logo is clearly visible on the chest."}}
-  ]
+  {verify_shape}
+  {face_shape}
 }}"""
-    user_prompt = "Verify each candidate against the image per the instructions above."
+    user_prompt = "Complete the task(s) above against the image(s) shown, in order."
     return system_prompt, user_prompt
 
 
-def run_agent2_verify_candidates(image_base64: "str | list[str]", candidates: dict) -> dict:
-    """candidates: {"logos": [{"brand_name","confidence"}], "characters": [{"name","confidence"}],
+def run_agent2_verify_candidates(image_base64: "str | list[str]", candidates: dict, face_crops: "list[dict] | None" = None) -> dict:
+    """
+    candidates: {"logos": [{"brand_name","confidence"}], "characters": [{"name","confidence"}],
     "celebrities": [{"name","confidence"}]} — lấy trực tiếp từ suspected_logos/suspected_characters/
-    suspected_celebrities của run_agent1_classify(). Không có candidate nào -> khỏi tốn 1 lần gọi
-    LLM, trả rỗng luôn (thiết kế sạch nhất: verify cái không tồn tại là vô nghĩa)."""
-    has_any = any((candidates or {}).get(k) for k in ("logos", "characters", "celebrities"))
-    if not has_any:
-        return {"verifications": []}
+    suspected_celebrities của run_agent1_classify().
 
-    system_prompt, user_prompt = _build_agent2_prompt(candidates)
-    raw = _call_llm_json(system_prompt, user_prompt, image_base64=image_base64, temperature=0.1)
-    raw_items = raw.get("verifications") if isinstance(raw.get("verifications"), list) else []
+    face_crops: (2026-08-21, MỚI) output opencv_modules.detect_and_crop_faces()["faces"] —
+    [{"face_base64","bbox_norm","detection_score"}, ...]. Model BlazeFace CHỈ detect vị trí mặt,
+    KHÔNG định danh — ảnh crop được gửi thẳng cho Agent 2 (Claude Vision) tự nhận diện trực
+    tiếp, KHÔNG đối chiếu database (quyết định của nhóm, xem docs.md).
 
-    clean = []
-    for item in raw_items:
+    Không có candidate NÀO và không có face_crop NÀO -> khỏi tốn 1 lần gọi LLM, trả rỗng luôn.
+    """
+    candidates = candidates or {}
+    face_crops = face_crops or []
+    has_candidates = any(candidates.get(k) for k in ("logos", "characters", "celebrities"))
+    if not has_candidates and not face_crops:
+        return {"verifications": [], "face_identifications": []}
+
+    system_prompt, user_prompt = _build_agent2_prompt(candidates, len(face_crops))
+
+    # Ảnh thiết kế gốc (1 hoặc nhiều trang) đi TRƯỚC, ảnh mặt crop đi SAU — nhãn riêng cho từng
+    # loại để Agent 2 không nhầm "trang thiết kế" với "ảnh mặt cắt" (xem _build_messages labels).
+    design_images = image_base64 if isinstance(image_base64, list) else ([image_base64] if image_base64 else [])
+    design_images = [img for img in design_images if img]
+    design_labels = (
+        [f"Design page {i + 1}/{len(design_images)}" for i in range(len(design_images))]
+        if len(design_images) > 1 else [None] * len(design_images)
+    )
+    face_images = [f["face_base64"] for f in face_crops if f.get("face_base64")]
+    face_labels = [f"Suspected face crop #{i} (detector confidence {face_crops[i].get('detection_score', 0):.2f})" for i in range(len(face_images))]
+
+    all_images = design_images + face_images
+    all_labels = design_labels + face_labels
+
+    raw = _call_llm_json(system_prompt, user_prompt, image_base64=all_images, temperature=0.1, labels=all_labels)
+
+    raw_verifications = raw.get("verifications") if isinstance(raw.get("verifications"), list) else []
+    clean_verifications = []
+    for item in raw_verifications:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip()
         category = item.get("category")
         if not name or category not in ("logo", "character", "celebrity"):
             continue
-        clean.append({
+        clean_verifications.append({
             "category": category,
             "name": name,
             # Thiếu field "present" (JSON lỗi/model bỏ sót) -> mặc định True (fail-open, KHÔNG
@@ -367,7 +438,27 @@ def run_agent2_verify_candidates(image_base64: "str | list[str]", candidates: di
             "present": bool(item.get("present", True)),
             "reasoning": str(item.get("reasoning", "")),
         })
-    return {"verifications": clean}
+
+    raw_faces = raw.get("face_identifications") if isinstance(raw.get("face_identifications"), list) else []
+    clean_faces = []
+    for item in raw_faces:
+        if not isinstance(item, dict):
+            continue
+        try:
+            face_index = int(item.get("face_index"))
+        except (TypeError, ValueError):
+            continue
+        name = item.get("suspected_name")
+        name = str(name).strip() if name else None
+        conf = item.get("confidence") if name else None  # không có tên -> confidence vô nghĩa, bỏ qua
+        clean_faces.append({
+            "face_index": face_index,
+            "suspected_name": name or None,
+            "confidence": conf if conf in ("low", "medium", "high") else None,
+            "reasoning": str(item.get("reasoning", "")),
+        })
+
+    return {"verifications": clean_verifications, "face_identifications": clean_faces}
 
 
 # =====================================================================

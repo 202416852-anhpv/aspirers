@@ -67,6 +67,27 @@ def _inject_text_region_bbox(positioning_notes: list, text_regions: list) -> lis
     return positioning_notes
 
 
+def _merge_detected_faces(face_crops: list, face_identifications: list) -> list:
+    """(2026-08-21) Ghép opencv_modules.detect_and_crop_faces()["faces"] (face_base64/bbox_norm,
+    theo thứ tự index gửi cho Agent 2) với agents.py::run_agent2_verify_candidates()
+    ["face_identifications"] (face_index/suspected_name/confidence/reasoning) thành shape CUỐI
+    cho FE (schemas.DetectedFace) — CỐ Ý bỏ "detection_score" (độ tin cậy CÓ-PHẢI-MẶT của
+    BlazeFace, khác hẳn ý nghĩa với "confidence" nhận diện danh tính của Agent 2, giữ 2 khái
+    niệm lẫn nhau sẽ gây hiểu nhầm) — chỉ dùng nội bộ để sort/chọn top N ở opencv_modules.py."""
+    by_index = {f["face_index"]: f for f in (face_identifications or []) if "face_index" in f}
+    out = []
+    for i, crop in enumerate(face_crops or []):
+        ident = by_index.get(i, {})
+        out.append({
+            "face_base64": crop.get("face_base64", ""),
+            "bbox_norm": crop.get("bbox_norm", []),
+            "suspected_name": ident.get("suspected_name"),
+            "confidence": ident.get("confidence"),
+            "reasoning": ident.get("reasoning", ""),
+        })
+    return out
+
+
 async def _resolve_input_to_image(image_base64: "str | None", file_path: "str | None", url: "str | None"):
     """
     Chuẩn hoá 1 trong 3 cách nhập (upload base64 / file_path cục bộ / url) về CÙNG 1 shape:
@@ -162,6 +183,10 @@ async def process_one_design(
 
     try:
         # ---- Call 1: Agent 1 Classify (TUẦN TỰ bắt buộc — Call 2 cần niche/OCR từ đây) ----
+        # detect_and_crop_faces (BlazeFace, 2026-08-21): KHÔNG phụ thuộc classify (chỉ cần
+        # local_path, đã có sẵn) -> kick off CONCURRENT với Agent 1 để không cộng dồn latency
+        # (crop mặt xong trước khi Agent 2 cần tới, xem bên dưới).
+        face_crop_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_and_crop_faces, local_path))
         classify = await asyncio.to_thread(cc_agents.run_agent1_classify, vision_images)
 
         if pdf_meta and pdf_meta.get("pdf_type") == "digital_native" and pdf_meta.get("all_pages_native_text"):
@@ -187,8 +212,17 @@ async def process_one_design(
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
         }
+        # face_crop_task đã chạy song song từ lúc classify bắt đầu — await ở đây để lấy crop
+        # THẬT (bytes ảnh) truyền cho Agent 2 nhận diện (agents.py::run_agent2_verify_candidates
+        # TASK 2). Lỗi ở nhánh này KHÔNG được làm sập cả design (fail-open, giống mọi nhánh khác).
+        try:
+            face_crops_result = await face_crop_task
+        except Exception as e:
+            face_crops_result = e
+        face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
+
         agent2_result, logo_match, char_match, trademark_flags, market, text_regions_result = await asyncio.gather(
-            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify),
+            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"]),
             asyncio.to_thread(cc_opencv.match_logo, local_path, {"suspected_logos": classify["suspected_logos"]}),
             asyncio.to_thread(cc_opencv.match_character, local_path),
             cc_trademark.resolve_trademark_phrases(classify["OCR_text"], niche),
@@ -197,7 +231,7 @@ async def process_one_design(
             return_exceptions=True,
         )
 
-        agent2_result = _safe_or_default(agent2_result, {"verifications": []}, "Agent 2", warnings)
+        agent2_result = _safe_or_default(agent2_result, {"verifications": [], "face_identifications": []}, "Agent 2", warnings)
         logo_match = _safe_or_default(logo_match, {"matches": []}, "match_logo", warnings)
         char_match = _safe_or_default(char_match, {"matches": []}, "match_character", warnings)
         trademark_flags = _safe_or_default(trademark_flags, [], "trademark_resolver", warnings)
@@ -222,6 +256,7 @@ async def process_one_design(
             ocr_text=classify["OCR_text"],
             suspected_logos=classify["suspected_logos"],
             agent2_verifications=agent2_result["verifications"],
+            face_identifications=agent2_result["face_identifications"],
         )
 
         # ---- Nhóm C: tổng hợp + định vị (1 LLM call) ----
@@ -261,6 +296,7 @@ async def process_one_design(
             "evidence": black_box_result["evidence"],
             "positioning_notes": positioning["positioning_notes"],
             "text_regions": text_regions_result["text_regions"],
+            "detected_faces": _merge_detected_faces(face_crops_result["faces"], agent2_result["face_identifications"]),
             "reasoning": agent3_result["reasoning"],
             "fix_suggestions": agent3_result["fix_suggestions"],
             "market_suggestion": market,

@@ -26,7 +26,10 @@ CATEGORY_THRESHOLDS = {
 
 _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE = 95.0
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# File này nằm ở compliance_checker/engine/ — data/ là con của compliance_checker/, cần
+# dirname() 2 lần (xem ghi chú chi tiết trong engine/agents.py cùng dòng này — bug thật đã
+# xảy ra 1 lần do quên chỗ này khi refactor thư mục).
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 # Quy đổi định tính (Vision) -> điểm số 0-100 CHỈ dùng cho 2 hàm cross-reference tên
 # (score_character_identity/score_celebrity_likeness bên dưới) — KHÔNG áp dụng cho OpenCV
@@ -230,9 +233,37 @@ def score_character_identity(suspected_characters: list) -> dict:
 
 
 def score_celebrity_likeness(suspected_celebrities: list) -> dict:
-    """Cross-reference suspected_celebrities (Agent 2) với celebrity_list.md. KHÔNG dùng
+    """Cross-reference suspected_celebrities (Agent 1) với celebrity_list.md. KHÔNG dùng
     face-recognition/biometric — chỉ đối chiếu TÊN (CLAUDE.md mục 2.2)."""
     return _score_name_cross_reference(suspected_celebrities, _load_reference_names("celebrity_list.md"), "celebrity_likeness")
+
+
+def score_celebrity_likeness_from_faces(face_identifications: "list | None") -> dict:
+    """
+    (2026-08-21) Nguồn THỨ 2, ĐỘC LẬP cho celebrity_likeness — dùng ảnh mặt THẬT đã cắt riêng
+    (BlazeFace detect vị trí, engine/opencv_modules.py::detect_and_crop_faces) rồi để Agent 2
+    (Claude Vision) tự nhận diện TRỰC TIẾP trên từng ảnh crop — xem agents.py::
+    run_agent2_verify_candidates(). KHÁC score_celebrity_likeness() ở trên (dùng
+    suspected_celebrities từ Agent 1 đoán trên CẢ ảnh thiết kế + có cross-reference
+    celebrity_list.md + cap nếu tên không có trong danh sách):
+
+    ⚠️ Hàm này CỐ Ý KHÔNG đối chiếu celebrity_list.md, KHÔNG áp _UNLISTED_NAME_SCORE_CAP —
+    theo đúng quyết định của nhóm "không so khớp database nữa, tin vào Claude" (input đã là
+    ảnh mặt phóng to/cắt riêng gửi thẳng cho Agent 2, đáng tin hơn hẳn so với đoán trên cả
+    ảnh thiết kế — nhưng đổi lại KHÔNG có lớp kiểm chứng độc lập nào nữa, rủi ro false
+    positive nếu Agent 2 tự tin nhầm; xem docs.md phần rủi ro đã ghi nhận).
+    """
+    if not face_identifications:
+        return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
+    named = [f for f in face_identifications if (f or {}).get("suspected_name")]
+    if not named:
+        return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
+    best = max(named, key=lambda f: _NAME_CONFIDENCE_SCORE.get(f.get("confidence") or "low", 45))
+    raw = _NAME_CONFIDENCE_SCORE.get(best.get("confidence") or "low", 45)
+    result = _score_numeric_category("celebrity_likeness", raw)
+    if result["tag"] != "SAFE":
+        result["detail"] = f"Agent 2 tự nhận diện trên ảnh mặt cắt riêng: nghi ngờ '{best.get('suspected_name')}' (không đối chiếu database, tin trực tiếp Claude)"
+    return result
 
 
 def _combine_category_results(a: dict, b: dict) -> dict:
@@ -371,6 +402,7 @@ def run_black_box(
     ocr_text: str = "",
     suspected_logos: "list | None" = None,
     agent2_verifications: "list | None" = None,
+    face_identifications: "list | None" = None,
 ) -> dict:
     """
     Điểm vào duy nhất orchestrator.py cần gọi — gói gọn toàn bộ black box thành 1 hàm.
@@ -392,6 +424,11 @@ def run_black_box(
 
     ocr_text: dùng thêm cho score_content_safety() quét blacklist_hardcoded.json (lớp lưới an
     toàn text bổ sung cho motif hình ảnh của Agent 1).
+
+    face_identifications: (2026-08-21, MỚI) output Agent 2 nhận diện trên ảnh mặt crop
+    (BlazeFace) — nguồn celebrity_likeness THỨ 2, ĐỘC LẬP với suspected_celebrities, KHÔNG
+    đối chiếu database (xem score_celebrity_likeness_from_faces()). Gộp với nguồn cũ qua
+    _combine_category_results (lấy tín hiệu nặng hơn), None/rỗng -> không đổi hành vi cũ.
     """
     suspected_characters = _apply_verification_filter(suspected_characters or [], agent2_verifications, "character", "name")
     suspected_celebrities = _apply_verification_filter(suspected_celebrities or [], agent2_verifications, "celebrity", "name")
@@ -418,7 +455,13 @@ def run_black_box(
         "trademark_text": score_trademark_text(trademark_flags),
         content_safety_key: content_safety_result,
     }
-    if suspected_celebrities:
-        category_results["celebrity_likeness"] = score_celebrity_likeness(suspected_celebrities)
+    celebrity_score = score_celebrity_likeness(suspected_celebrities) if suspected_celebrities else None
+    face_score = score_celebrity_likeness_from_faces(face_identifications) if face_identifications else None
+    if celebrity_score and face_score:
+        category_results["celebrity_likeness"] = _combine_category_results(celebrity_score, face_score)
+    elif celebrity_score:
+        category_results["celebrity_likeness"] = celebrity_score
+    elif face_score:
+        category_results["celebrity_likeness"] = face_score
 
     return aggregate_final_verdict(category_results)

@@ -1,0 +1,12 @@
+{
+  "source": "Do nguoi dung tai them thu cong vao du an (khong phai Claude tai) - MediaPipe BlazeFace short-range, model public chinh thuc cua Google (https://storage.googleapis.com/mediapipe-assets/blaze_face_short_range.tflite / https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector).",
+  "last_updated": "2026-08-21",
+  "models": [
+    {
+      "file": "blaze_face_short_range.tflite",
+      "purpose": "Face DETECTION (khoanh vung mat trong anh) - dung qua cv2.dnn.readNetFromTFLite trong engine/opencv_modules.py::detect_and_crop_faces(). KHONG phai face-recognition/embedding - model nay CHI tra ve bounding box + score co mat hay khong, KHONG tra ve danh tinh. Danh tinh (suspected_name) do Agent 2 (Claude Vision) tu nhan dien truc tiep tren anh crop, KHONG dung database/embedding matching sinh trac hoc nao ca.",
+      "architecture": "BlazeFace short-range, input 128x128 RGB normalize [-1,1], output 2 tensor (classificators, regressors) voi 896 anchor.",
+      "size_bytes": 229746
+    }
+  ]
+}

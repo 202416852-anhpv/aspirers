@@ -261,6 +261,15 @@ body {
 .bbox-source-tag { font-size: 0.68rem; color: var(--accent); margin-left: 0.4rem; }
 .verify-badge { font-size: 0.72rem; }
 
+.face-grid { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.3rem; }
+.face-card { width: 84px; text-align: center; font-size: 0.72rem; }
+.face-thumb { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.face-label { margin-top: 0.25rem; line-height: 1.25; word-break: break-word; }
+.face-conf { display: inline-block; font-size: 0.64rem; padding: 0.02rem 0.32rem; border-radius: 999px; margin-left: 0.1rem; }
+.face-conf-high { background: #fde3e3; }
+.face-conf-medium { background: #fff1cc; }
+.face-conf-low { background: #eef; }
+
 .section-title { font-weight: 600; font-size: 0.85rem; margin: 0.85rem 0 0.35rem; color: var(--text-primary); }
 
 .evidence-item { border-left: 3px solid var(--border); padding: 0.45rem 0.65rem; margin-bottom: 0.4rem; background: #fff; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }

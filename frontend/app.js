@@ -552,6 +552,32 @@ function renderPositioningOverlay(r, previewUrl) {
   `;
 }
 
+// (2026-08-21) Khuôn mặt phát hiện bằng BlazeFace + tự nhận diện bởi Agent 2 (KHÔNG đối
+// chiếu database, tin trực tiếp Claude — xem black_box.py::score_celebrity_likeness_from_faces).
+// Hiện thumbnail crop thật (face_base64, gửi kèm response — backend chỉ trả crop nhỏ, không
+// phải cả ảnh gốc) + tên nghi ngờ + nhãn high/medium/low. ⚠️ Đây là NGOẠI LỆ có chủ đích của
+// quy tắc "không hiện confidence": người dùng yêu cầu RÕ RÀNG hiện high/medium/low cho tính
+// năng này — vẫn tuyệt đối KHÔNG có số/% nào, chỉ nhãn định tính.
+function renderDetectedFaces(faces) {
+  if (!faces || !faces.length) return "";
+  const cards = faces
+    .map((f) => {
+      const label = f.suspected_name
+        ? `<b>${escapeHtml(f.suspected_name)}</b>${f.confidence ? ` <span class="face-conf face-conf-${f.confidence}">${f.confidence}</span>` : ""}`
+        : `<span class="empty-note">Không nhận diện được</span>`;
+      const title = f.reasoning ? ` title="${escapeHtml(f.reasoning)}"` : "";
+      return `<div class="face-card"${title}>
+        <img class="face-thumb" src="data:image/jpeg;base64,${f.face_base64}" />
+        <div class="face-label">${label}</div>
+      </div>`;
+    })
+    .join("");
+  return `
+    <div class="section-title">Khuôn mặt phát hiện (BlazeFace + Agent 2 tự nhận diện, không đối chiếu database)</div>
+    <div class="face-grid">${cards}</div>
+  `;
+}
+
 function renderResultCard(r, grading, previewUrl) {
   const verificationMap = buildVerificationMap(r.verifications);
 
@@ -633,6 +659,8 @@ function renderResultCard(r, grading, previewUrl) {
 
     <div class="section-title">Người nổi tiếng nghi ngờ <span class="empty-note">(✅/❌ = Agent 2 đã kiểm tra lại ảnh)</span></div>
     ${renderChipList(r.suspected_celebrities, "name", "celebrity", verificationMap)}
+
+    ${renderDetectedFaces(r.detected_faces)}
 
     <div class="section-title">OCR text</div>
     <div class="ocr-box">${escapeHtml(r.OCR_text) || "(không có chữ)"}</div>

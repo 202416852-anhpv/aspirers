@@ -183,10 +183,53 @@ Toàn bộ `compliance_checker/` (10 module + `data/`) đã code, compile, chạ
     - **Verify thật bằng ảnh Gen.G banner** (`process_one_design` + validate qua `DesignComplianceResult` Pydantic): Agent 1 ra đúng 5 logo (LG UltraGear/Monster Energy/Logitech/GS/GENG), 0 character/celebrity (đúng — ảnh này không có). Agent 2 verify cả 5, verdict cuối vẫn `RISKY` đúng như hành vi cũ (không có gì bị mất oan).
     - ⚠️ **Hạn chế phát hiện được qua test thật**: Agent 2 đôi khi KHÔNG echo lại tên candidate y hệt (vd Agent 1 nêu `"GS (Korean brand)"`, Agent 2 lại verify `"YOUR.GG"` — 1 brand nó tự thấy rõ hơn thay vì trả lời đúng/sai cho tên đã cho) — vi phạm nhẹ chỉ dẫn "verify-only, không tự thêm mục mới" trong prompt. Hệ quả THỰC TẾ vô hại nhờ fail-open (`_apply_verification_filter`): mục không khớp tên đơn giản không có badge ✅/❌, KHÔNG bị lọc oan, KHÔNG crash — nhưng badge có thể thiếu ở 1 số case tên bị diễn đạt khác. Chưa fix (ngoài phạm vi yêu cầu hôm nay) — có thể cải thiện sau bằng fuzzy name-match thay vì exact-match nếu cần.
     - ⚠️ **Gap liên quan phát hiện thêm (KHÔNG phải do thay đổi hôm nay, có từ trước)**: Nhóm C tự đặt tên `category` cho `positioning_notes` tự do (vd thấy `"trademark_text_phrases"` thay vì đúng string `"trademark_text"` mà `orchestrator._inject_text_region_bbox()` đang so khớp CHÍNH XÁC) — nghĩa là tính năng gắn `bbox_norm` thật vào positioning_note (mục 9 ở trên) có thể ÍT KHI kích hoạt hơn dự kiến nếu Nhóm C không dùng đúng tên category. Chưa fix, cần ràng buộc rõ vocabulary category trong prompt Nhóm C nếu muốn tăng tỷ lệ khớp.
+11. **(2026-08-21) Refactor thư mục (mục 9) làm HỎNG NGẦM việc đọc `data/` — đã phát hiện + vá lại
+    trong phiên làm việc NÀY**, khi test tính năng face detection bên dưới: `agents.py`/
+    `black_box.py`/`trademark_resolver.py` (đều nằm trong `engine/` sau refactor) vẫn dùng
+    `_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")` — SAI, vì `data/` là con của
+    `compliance_checker/`, không phải của `engine/`. Hệ quả: MỌI file trong `data/`
+    (niche_taxonomy.json, character_list.md, policies/*.md, logo_refs/manifest.json...) load
+    RỖNG TRONG IM LẶNG (có try/except fallback nên không crash — verify OpenAPI schema ở mục 9
+    không bắt được lỗi này vì đó là lỗi RUNTIME DATA, không phải lỗi SCHEMA/ROUTE). Đã sửa: cả
+    3 file đổi thành `os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")` + verify
+    lại thật (load niche_taxonomy/character_list.md/policies đều ra đúng dữ liệu, không rỗng nữa).
+12. **(2026-08-21) Face detection (BlazeFace) + Agent 2 tự nhận diện danh tính — tính năng MỚI,
+    người dùng tự cung cấp model:**
+    - `data/models/blaze_face_short_range.tflite` (MediaPipe BlazeFace, người dùng tự thêm) —
+      `engine/opencv_modules.py::detect_and_crop_faces()` chạy qua `cv2.dnn.readNetFromTFLite`,
+      port NGUYÊN VẸN thuật toán + toàn bộ threshold từ script gốc người dùng cung cấp
+      (multi-scale tiling để bắt cả mặt nhỏ, NMS 2 tầng, margin 20%) — KHÔNG chỉnh số.
+      Trả top 5 mặt điểm cao nhất, mỗi mặt kèm ảnh crop base64 (tự phóng to nếu quá nhỏ trước
+      khi encode, không ảnh hưởng bbox/score) + `bbox_norm`.
+    - ⚠️ Đây CHỈ là face **DETECTION** (khoanh vùng "có mặt người ở đây") — KHÔNG phải face-
+      recognition/embedding sinh trắc học. Model chỉ trả bounding box + score, KHÔNG trả danh tính.
+    - **Danh tính do Agent 2 (Claude Vision) tự nhận diện trực tiếp trên ảnh crop** — theo đúng
+      quyết định của nhóm **"không so khớp database nữa, tin vào Claude"**: `agents.py`
+      (`run_agent2_verify_candidates`, TASK 2 mới) nhận thêm `face_crops`, gửi kèm ảnh thiết kế
+      gốc trong CÙNG 1 lần gọi LLM (nhãn riêng "Design page"/"Suspected face crop #N" qua
+      `_build_messages(..., labels=...)`, MỚI — không tăng số lần gọi API). Output thêm
+      `face_identifications`: `suspected_name` (null nếu không nhận ra — prompt yêu cầu THÀNH
+      THẬT, không đoán bừa) + `confidence` high/medium/low.
+    - `black_box.py::score_celebrity_likeness_from_faces()` — nguồn celebrity_likeness THỨ 2,
+      ĐỘC LẬP với `suspected_celebrities` cũ, **CỐ Ý KHÔNG** đối chiếu `celebrity_list.md`/
+      không áp `_UNLISTED_NAME_SCORE_CAP` (khác hẳn nguồn cũ) — gộp qua `_combine_category_results`
+      (lấy tín hiệu nặng hơn). Đánh đổi: chính xác hơn (ảnh mặt phóng to/cắt riêng) nhưng KHÔNG
+      còn lớp kiểm chứng độc lập nào — rủi ro false positive nếu Agent 2 tự tin nhầm 1 mình.
+    - `DesignComplianceResult.detected_faces` — FE (`renderDetectedFaces`) hiện thumbnail thật +
+      tên + badge high/medium/low. ⚠️ **Ngoại lệ có chủ đích** của quy tắc "không hiện confidence"
+      (mục 10) — người dùng yêu cầu RÕ RÀNG hiện nhãn định tính cho tính năng này; vẫn tuyệt đối
+      không có số/% nào.
+    - **Verify thật bằng ảnh Gen.G banner** (`process_one_design`, validate Pydantic OK): phát
+      hiện đúng 5 khuôn mặt (điểm 0.97→0.87, khớp 100% với script gốc chạy độc lập). Agent 2
+      **từ chối nhận diện cả 5** ("Cannot reliably identify this person...") — đúng hành vi mong
+      muốn (tuyển thủ esports ít nổi tiếng toàn cầu, Agent 2 thành thật thay vì đoán bừa) —
+      chứng minh prompt "thành thật, đừng đoán" hoạt động đúng, không hallucinate tên ngẫu nhiên.
+    - Model file + script gốc do người dùng cung cấp, KHÔNG phải Claude tự tải — ghi rõ nguồn
+      trong `data/models/manifest.json` theo đúng quy định CLAUDE.md.
 
 ### Giới hạn còn lại — cần biết trước khi demo
 
-1. `match_character`/`match_logo` vẫn là placeholder — **quyết định CUỐI, không triển khai nữa** (xem mục 9 ở trên). `detect_text_regions()` đã hoạt động thật, không phải placeholder.
+1. `match_character`/`match_logo` vẫn là placeholder — **quyết định CUỐI, không triển khai nữa** (xem mục 9 ở trên). `detect_text_regions()` và `detect_and_crop_faces()` (mục 12) đã hoạt động thật, không phải placeholder.
 2. `logo_refs/`/`anime_character_refs/` chưa có ảnh thật, chỉ có manifest/README mô tả cấu trúc.
 3. `trademark_top1000.json` mới có ~90 phrase thật (curated thủ công), chưa đạt quy mô 500-1000.
 4. Live USPTO lookup chưa test với API key thật (`USPTO_API_KEY`) — chưa có key thì tự động bỏ qua an toàn.
@@ -194,6 +237,10 @@ Toàn bộ `compliance_checker/` (10 module + `data/`) đã code, compile, chạ
 6. Cột CSV output đã đối chiếu 1 phần với file mẫu THẬT từ BGK (`design_samples_template.xlsx`, mục 4) — nhưng chưa chắc đây là ĐÚNG format "file nộp bài" ở brief mục 4.4 (link Google Sheet riêng, vẫn chưa fetch được).
 7. Threshold trong `black_box.py` chưa tune trên bộ ảnh thật đa dạng (≥20-30 ảnh, có đáp án đúng).
 8. Batch chưa cache trademark query giữa các design cùng batch (hàm đã viết sẵn nhưng chưa được gọi).
+9. `score_celebrity_likeness_from_faces()` (mục 12) tin trực tiếp Agent 2, không có lớp kiểm
+   chứng độc lập nào — nếu Agent 2 tự tin nhận nhầm 1 người thường thành celebrity, verdict có
+   thể lên `RISKY`/`BLOCKED` sai mà không có cách nào tự phát hiện được (đánh đổi có chủ đích
+   theo yêu cầu "tin vào Claude", không phải bug).
 ---
 
 ## 8. Chạy thử nhanh

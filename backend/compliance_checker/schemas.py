@@ -74,8 +74,25 @@ class VerificationItem(BaseModel):
     reasoning: str = Field(default="", description="1 câu giải thích ngắn cho phán đoán trực quan")
 
 
+# (2026-08-21) FACE IDENTIFICATION — nhánh MỚI, độc lập với verifications ở trên. Ảnh mặt do
+# engine/opencv_modules.py::detect_and_crop_faces() (BlazeFace, chỉ DETECT vị trí mặt, không
+# định danh) cắt ra được gửi thẳng cho Agent 2 — Agent 2 tự nhận diện DANH TÍNH trực tiếp
+# bằng vision zero-shot, theo đúng quyết định của nhóm "không so khớp database nữa, tin vào
+# Claude" (khác hẳn suspected_celebrities/VerificationItem ở trên, vốn có cross-reference với
+# celebrity_list.md — xem black_box.py::score_celebrity_likeness_from_faces()).
+class FaceIdentification(BaseModel):
+    face_index: int = Field(..., description="Vị trí ảnh crop trong danh sách gửi cho Agent 2 (0-based)")
+    suspected_name: Optional[str] = Field(
+        default=None,
+        description="Agent 2 tự nhận diện — tên người nghi ngờ, hoặc None nếu KHÔNG nhận ra đây là ai (đa số mặt trong ảnh KHÔNG phải người nổi tiếng, Agent 2 được yêu cầu thành thật thay vì đoán bừa)"
+    )
+    confidence: Optional[Confidence] = Field(default=None, description="Độ tự tin ĐỊNH TÍNH của việc nhận diện — None nếu suspected_name None")
+    reasoning: str = Field(default="", description="1 câu giải thích ngắn")
+
+
 class Agent2Result(BaseModel):
     verifications: List[VerificationItem] = Field(default_factory=list)
+    face_identifications: List[FaceIdentification] = Field(default_factory=list)
 
 
 # =====================================================================
@@ -180,6 +197,17 @@ class TextRegion(BaseModel):
     area_ratio: float = Field(..., ge=0.0, le=1.0, description="Diện tích vùng / diện tích ảnh")
 
 
+class DetectedFace(BaseModel):
+    """(2026-08-21) Merge của opencv_modules.detect_and_crop_faces() (bbox_norm + ảnh crop)
+    và Agent2Result.face_identifications (suspected_name + confidence) — orchestrator.py ghép
+    2 nguồn theo face_index, đây là shape CUỐI trả về cho FE (không phải shape thô nội bộ)."""
+    face_base64: str = Field(..., description="Ảnh khuôn mặt đã crop (JPEG base64) — để FE hiện thumbnail")
+    bbox_norm: List[float] = Field(..., description="[x0,y0,x1,y1] normalize 0-1 trên ảnh GỐC (chưa crop)")
+    suspected_name: Optional[str] = Field(default=None, description="None nếu Agent 2 không nhận ra đây là ai cụ thể")
+    confidence: Optional[Confidence] = Field(default=None, description="low/medium/high — KHÔNG có field số/% nào, đúng yêu cầu UI")
+    reasoning: str = Field(default="")
+
+
 # =====================================================================
 # 7. AGENT 3 — REASONING + FIX SUGGESTION
 # =====================================================================
@@ -245,6 +273,12 @@ class DesignComplianceResult(BaseModel):
         description="Toàn bộ vùng có khả năng chứa chữ phát hiện bằng OpenCV (MSER) trên ảnh raster "
                     "đang xử lý — tín hiệu hình học chung, KHÔNG gắn với 1 category cụ thể (khác "
                     "positioning_notes[].bbox_norm, vốn chỉ gắn cho category trademark_text khi match được)."
+    )
+    detected_faces: List[DetectedFace] = Field(
+        default_factory=list,
+        description="(2026-08-21) Mọi khuôn mặt BlazeFace phát hiện được, kèm Agent 2 tự nhận diện "
+                    "(không đối chiếu database) — FE hiện thumbnail + tên nghi ngờ + confidence "
+                    "định tính, KHÔNG có số/%."
     )
     reasoning: str = ""
     fix_suggestions: List[FixSuggestion] = Field(default_factory=list)
