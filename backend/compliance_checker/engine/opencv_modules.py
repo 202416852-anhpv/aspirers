@@ -1,16 +1,16 @@
 """
-compliance_checker/engine/opencv_modules.py — 3 nhóm hàm khác trạng thái:
+compliance_checker/engine/opencv_modules.py — 4 nhóm hàm khác trạng thái:
 
   1. PLACEHOLDER (match_character, match_logo, extract_fonts): cần embedding/model + ảnh
      reference thật (anime_character_refs/, logo_refs/) — nhóm đã QUYẾT ĐỊNH BỎ hướng này
      (quá khó trong thời gian hackathon, xem ghi chú trong từng hàm). KHÔNG tự ý code lại
      thuật toán bên trong 3 hàm này — giữ nguyên đúng contract shape của CLAUDE.md mục 3 để
      orchestrator.py vẫn gọi được, luôn trả rỗng.
-  2. ĐANG HOẠT ĐỘNG THẬT (detect_text_regions): thay thế hướng match_character/match_logo
-     bằng 1 kỹ thuật OpenCV cổ điển đơn giản hơn nhiều — KHÔNG cần model/dataset/ảnh
-     reference, chỉ dùng MSER + morphological dilation + contour để khoanh vùng CÓ KHẢ NĂNG
-     chứa chữ trên ảnh. Dùng để vẽ toạ độ thật lên giao diện thay cho mô tả grid 3x3 bằng lời
-     (xem orchestrator.py + frontend/app.js).
+  2. VẪN HOẠT ĐỘNG NHƯNG KHÔNG CÒN ĐƯỢC GỌI (detect_text_regions, 2026-08-21): MSER-based,
+     chỉ khoanh vùng "trông giống chữ" (hình học thuần, KHÔNG đọc nội dung). Đã bị THAY THẾ
+     bởi extract_text_blocks() bên dưới (OCR thật, có nội dung + bbox chính xác hơn hẳn) —
+     giữ lại hàm này (không xoá, vẫn chạy đúng nếu gọi) phòng khi cần fallback không cần
+     rapidocr_onnxruntime, nhưng orchestrator.py hiện KHÔNG còn gọi tới.
   3. ĐANG HOẠT ĐỘNG THẬT (detect_and_crop_faces, 2026-08-21): dùng model BlazeFace short-range
      (do người dùng tự thêm vào data/models/, xem manifest.json ở đó) để KHOANH VÙNG + CẮT mọi
      khuôn mặt trong ảnh — đây CHỈ là face DETECTION (tìm "có mặt người ở đâu"), KHÔNG phải
@@ -18,11 +18,16 @@ compliance_checker/engine/opencv_modules.py — 3 nhóm hàm khác trạng thái
      (Claude Vision) tự nhận diện trực tiếp — xem agents.py::run_agent2_verify_candidates.
      Toàn bộ threshold/config port NGUYÊN VẸN từ script gốc người dùng cung cấp
      (crop_face_blazeface.py, đã tự fine-tune trên nhiều ảnh thật) — KHÔNG chỉnh lại số.
+  4. ĐANG HOẠT ĐỘNG THẬT (extract_text_blocks, 2026-08-21): OCR THẬT (RapidOCR/ONNX, khác hẳn
+     detect_text_regions ở mục 2 — đọc được NỘI DUNG chữ, không chỉ khoanh vùng) + tự gộp các
+     box chữ rời rạc thành block/line theo hình học (cùng font size, cùng hàng...). Port từ
+     script gốc người dùng cung cấp (test_ocr.py) — bỏ phần ghi crop ảnh ra đĩa (không cần,
+     pipeline chỉ cần TEXT + bbox, xem agents.py TASK 3 + lý do quyết định trong docs.md).
 
 Nguyên tắc chung mọi hàm trong file: nhận image_path (string), trả dict JSON-serializable,
 KHÔNG BAO GIỜ raise exception ra ngoài (đọc ảnh lỗi/thiếu file vẫn trả rỗng đúng shape).
 
-pip install opencv-contrib-python numpy (đã có sẵn trong hệ thống hiện tại)
+pip install opencv-contrib-python numpy rapidocr_onnxruntime (đã có sẵn trong hệ thống hiện tại)
 """
 
 import base64
@@ -34,6 +39,12 @@ try:
     _CV2_AVAILABLE = True
 except ImportError:
     _CV2_AVAILABLE = False
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    _RAPIDOCR_AVAILABLE = True
+except ImportError:
+    _RAPIDOCR_AVAILABLE = False
 
 FONT_DISCLAIMER = (
     "Font detection is best-effort. Recommend manual verification against font license "
@@ -455,3 +466,208 @@ def detect_and_crop_faces(image_path: str, max_faces: int = _FACE_MAX_CROPS) -> 
         return {"faces": out}
     except Exception:
         return {"faces": []}
+
+
+# =====================================================================
+# TEXT BLOCK EXTRACTION (RapidOCR) — 2026-08-21, port từ test_ocr.py (script do người dùng
+# tự viết, cung cấp cùng yêu cầu). Khác detect_text_regions() (MSER, chỉ khoanh vùng): đây là
+# OCR THẬT — đọc được NỘI DUNG chữ, dùng cho Agent 2 so khớp trademark + tự đánh giá "cảm
+# nhận". Đã bỏ phần cv2.imwrite crop ra đĩa của script gốc (pipeline chỉ cần TEXT + bbox_norm,
+# không cần lưu file ảnh — Agent 2 nhận TEXT chứ không nhận ảnh, xem quyết định trong docs.md).
+# Cũng bỏ hàm same_block() của script gốc — định nghĩa nhưng KHÔNG được gọi ở đâu trong
+# get_grouped_ocr_results() gốc (chỉ same_block_boxes() được dùng thật) — port đúng phần
+# THẬT SỰ chạy, không port code chết.
+# =====================================================================
+
+_OCR_ENGINE_CACHE = None
+_OCR_ENGINE_LOAD_FAILED = False
+_OCR_MAX_BLOCKS = 30  # safety valve chống ảnh lỗi/nhiễu sinh quá nhiều block vụn, không phải giới hạn hành vi bình thường
+
+
+def _get_ocr_engine():
+    global _OCR_ENGINE_CACHE, _OCR_ENGINE_LOAD_FAILED
+    if _OCR_ENGINE_CACHE is not None or _OCR_ENGINE_LOAD_FAILED:
+        return _OCR_ENGINE_CACHE
+    try:
+        _OCR_ENGINE_CACHE = RapidOCR()
+    except Exception:
+        _OCR_ENGINE_LOAD_FAILED = True
+        _OCR_ENGINE_CACHE = None
+    return _OCR_ENGINE_CACHE
+
+
+def _ocr_box_info(box, text="", score=0.0):
+    pts = np.asarray(box, dtype=np.float32)
+    x1, y1 = pts.min(axis=0)
+    x2, y2 = pts.max(axis=0)
+    return {
+        "pts": pts,
+        "x1": float(x1), "y1": float(y1), "x2": float(x2), "y2": float(y2),
+        "cx": float((x1 + x2) / 2), "cy": float((y1 + y2) / 2),
+        "w": float(x2 - x1), "h": float(y2 - y1),
+        "text": text.strip(), "confidence": float(score),
+    }
+
+
+def _ocr_overlap(a, b, axis="x"):
+    if axis == "x":
+        inter = max(0, min(a["x2"], b["x2"]) - max(a["x1"], b["x1"]))
+        size = min(a["w"], b["w"])
+    else:
+        inter = max(0, min(a["y2"], b["y2"]) - max(a["y1"], b["y1"]))
+        size = min(a["h"], b["h"])
+    return (inter / size) if size > 0 else 0
+
+
+def _ocr_gap(a, b, axis="x"):
+    if axis == "x":
+        return max(0, max(a["x1"], b["x1"]) - min(a["x2"], b["x2"]))
+    return max(0, max(a["y1"], b["y1"]) - min(a["y2"], b["y2"]))
+
+
+def _ocr_same_line(a, b, block_h=None):
+    """Không chỉ dựa vào Y: Y phải tương đối thẳng hàng, chiều cao chữ tương đối giống,
+    khoảng cách X hợp lý."""
+    a_h, b_h = a["h"], b["h"]
+    h = (a_h + b_h) / 2
+    ref_h = float(block_h) if block_h is not None else h
+    h_sim = min(a_h, b_h) / max(a_h, b_h)
+    if h_sim < 0.45:
+        return False
+
+    y_overlap = _ocr_overlap(a, b, "y")
+    y_dist = abs(a["cy"] - b["cy"])
+    x_gap = _ocr_gap(a, b, "x")
+
+    if y_overlap < 0.15 and y_dist > ref_h * 0.8:
+        return False
+    if x_gap > ref_h * 3.5:
+        return False
+
+    y_score = max(0.0, 1.0 - y_dist / (ref_h * 0.9))
+    x_score = max(0.0, 1.0 - x_gap / (ref_h * 3.5))
+    score = 0.40 * y_score + 0.25 * y_overlap + 0.20 * h_sim + 0.15 * x_score
+    return score >= 0.5
+
+
+def _ocr_make_groups(items, relation):
+    """Connected components bằng Union-Find."""
+    n = len(items)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        a, b = find(a), find(b)
+        if a != b:
+            parent[b] = a
+
+    has_geom = n > 0 and isinstance(items[0], dict) and "x1" in items[0]
+    for i in range(n):
+        a = items[i]
+        for j in range(i + 1, n):
+            b = items[j]
+            if has_geom:
+                if max(a.get("y1", 0), b.get("y1", 0)) - min(a.get("y2", 0), b.get("y2", 0)) > max(a.get("h", 0), b.get("h", 0)) * 10:
+                    continue
+            if relation(a, b):
+                union(i, j)
+
+    groups = {}
+    for i in range(n):
+        root = find(i)
+        groups.setdefault(root, []).append(items[i])
+    return list(groups.values())
+
+
+def _ocr_same_block_boxes(a, b):
+    """Quyết định 2 box chữ có cùng 1 block hay không — dựa vào chiều cao box (font size)
+    làm tín hiệu chính, để block hình thành theo đúng cỡ chữ + khoảng cách gần nhau."""
+    a_h, b_h = a["h"], b["h"]
+    h = (a_h + b_h) / 2
+    if abs(a["cy"] - b["cy"]) > h * 6:
+        return False
+    x_overlap = max(0, min(a["x2"], b["x2"]) - max(a["x1"], b["x1"])) / max(1, min(a["w"], b["w"]))
+    left_aligned = abs(a["x1"] - b["x1"]) <= h * 2
+    if x_overlap >= 0.25 or left_aligned:
+        return True
+    if _ocr_gap(a, b, "x") <= h * 2.5:
+        return True
+    return False
+
+
+def extract_text_blocks(image_path: str, min_confidence: float = 0.3) -> dict:
+    """
+    Output: {"text_blocks": [{"bbox": [x0,y0,x1,y1], "bbox_norm": [nx0,ny0,nx1,ny1],
+             "text": str, "ocr_confidence": float}, ...]}
+    Tối đa _OCR_MAX_BLOCKS phần tử (safety valve, không phải giới hạn hành vi bình thường).
+    ocr_confidence: 0-100, độ tin cậy đọc chữ THẬT của RapidOCR — CHỈ dùng nội bộ (lọc
+    junk/sort), KHÔNG phải "high/medium/low" định tính như các field confidence khác trong
+    hệ thống, orchestrator.py KHÔNG đưa field này ra response cuối cùng.
+    Ảnh lỗi/không đọc được/model chưa sẵn sàng/không có chữ nào: {"text_blocks": []}.
+
+    text: NỘI DUNG chữ thật đã OCR (khác detect_text_regions() ở trên — hàm đó KHÔNG đọc nội
+    dung). Mỗi block có thể gồm NHIỀU dòng (nối bằng "\\n") nếu OCR + gộp hình học xác định
+    chúng cùng 1 khối văn bản (vd 1 đoạn slogan nhiều dòng) — Agent 2 (agents.py) được yêu cầu
+    tự ghép nối thêm giữa CÁC block nếu cần (vd slogan bị tách rời 2 block do khoảng cách),
+    hàm này chỉ gộp trong phạm vi hình học 1 block, không đoán ngữ nghĩa.
+    """
+    img = _safe_imread(image_path)
+    if img is None or not _RAPIDOCR_AVAILABLE:
+        return {"text_blocks": []}
+    engine = _get_ocr_engine()
+    if engine is None:
+        return {"text_blocks": []}
+    try:
+        h_img, w_img = img.shape[:2]
+        result, _ = engine(img)
+        if not result:
+            return {"text_blocks": []}
+
+        detections = [
+            _ocr_box_info(box, text, score)
+            for box, text, score in result
+            if float(score) >= min_confidence and text.strip()
+        ]
+        if not detections:
+            return {"text_blocks": []}
+
+        # Stage 1: box -> block (gộp theo font size + khoảng cách)
+        blocks_raw = _ocr_make_groups(detections, _ocr_same_block_boxes)
+
+        text_blocks = []
+        for blk in blocks_raw:
+            font_h = float(np.median([x["h"] for x in blk]))
+            # Stage 2: trong 1 block, gộp box -> line (dòng), biased theo font_h của block
+            lines_in_blk = _ocr_make_groups(blk, lambda a, b: _ocr_same_line(a, b, block_h=font_h))
+            for line in lines_in_blk:
+                line.sort(key=lambda x: x["x1"])  # trái sang phải
+            lines_in_blk.sort(key=lambda line: min(x["y1"] for x in line))  # trên xuống dưới
+
+            text = "\n".join(" ".join(x["text"] for x in line) for line in lines_in_blk)
+            items = [x for line in lines_in_blk for x in line]
+
+            pts = np.concatenate([x["pts"] for x in items])
+            x1, y1 = pts.min(axis=0)
+            x2, y2 = pts.max(axis=0)
+            x1 = max(0, int(x1)); y1 = max(0, int(y1))
+            x2 = min(w_img, int(x2)); y2 = min(h_img, int(y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            text_blocks.append({
+                "bbox": [x1, y1, x2, y2],
+                "bbox_norm": [round(x1 / w_img, 4), round(y1 / h_img, 4), round(x2 / w_img, 4), round(y2 / h_img, 4)],
+                "text": text,
+                "ocr_confidence": round(float(np.mean([x["confidence"] for x in items])) * 100, 1),
+            })
+
+        # Sort theo diện tích giảm dần (block lớn/nổi bật thường quan trọng hơn) rồi cap.
+        text_blocks.sort(key=lambda b: (b["bbox"][2] - b["bbox"][0]) * (b["bbox"][3] - b["bbox"][1]), reverse=True)
+        return {"text_blocks": text_blocks[:_OCR_MAX_BLOCKS]}
+    except Exception:
+        return {"text_blocks": []}

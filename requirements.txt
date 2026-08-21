@@ -36,3 +36,4 @@ psd-tools==1.18.0
 # thật). CHỈ giữ 1 trong 2 gói opencv — dùng contrib vì có sẵn cv2.dnn cho hướng ONNX embedding.
 opencv-contrib-python==4.10.0.84
 numpy==2.3.5
+rapidocr-onnxruntime==1.2.3

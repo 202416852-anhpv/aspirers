@@ -44,6 +44,20 @@ def _classify_and_rewrite(url: str) -> str:
             return f"https://drive.google.com/uc?export=download&id={file_id}"
         return url  # không tách được id -> để nguyên, thử fetch thẳng (có thể vẫn fail, chấp nhận được)
 
+    if "docs.google.com" in host and "/spreadsheets/" in url:
+        # (2026-08-21) Google Sheets — KHÁC hẳn Drive (file tĩnh): URL "edit" mặc định trả về
+        # HTML app 200-300KB (đã verify thật), KHÔNG phải data. Viết lại về export CSV của
+        # ĐÚNG sheet (gid) đang xem — verify thật: link mẫu BGK
+        # (docs.google.com/spreadsheets/d/.../edit?gid=256492005) rewrite đúng cách này trả về
+        # CHÍNH XÁC 30 dòng data thật khớp design_samples_template.xlsx.
+        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+        if m:
+            sheet_id = m.group(1)
+            gid_match = re.search(r"[?&#]gid=([0-9]+)", url)
+            gid = gid_match.group(1) if gid_match else "0"  # không có gid -> sheet đầu tiên
+            return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+        return url  # không tách được sheet id -> để nguyên, thử fetch thẳng (chấp nhận có thể fail)
+
     if "dropbox.com" in host:
         if "dl=0" in url:
             return url.replace("dl=0", "dl=1")
@@ -79,6 +93,8 @@ def classify_link_type(url: str) -> str:
     host = urlparse(url).netloc.lower()
     if "drive.google.com" in host:
         return "google_drive"
+    if "docs.google.com" in host and "/spreadsheets/" in url:
+        return "google_sheets"
     if "dropbox.com" in host:
         return "dropbox"
     if "amazonaws.com" in host or "s3." in host:

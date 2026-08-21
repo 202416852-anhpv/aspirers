@@ -181,6 +181,29 @@ def decode_csv_bytes(raw_bytes: bytes) -> str:
     return raw_bytes.decode("utf-8-sig")
 
 
+def _looks_like_xlsx(raw_bytes: bytes) -> bool:
+    """XLSX (và mọi định dạng Office mới — docx/pptx) thực chất là 1 file ZIP, luôn bắt đầu
+    bằng magic bytes "PK". CSV/text thường KHÔNG bao giờ bắt đầu bằng 2 byte này — đủ tin cậy
+    để phân biệt khi KHÔNG có tên file/đuôi file để dựa vào (vd batch source tải về từ URL,
+    khác hẳn nhánh upload trực tiếp ở routes.py vốn check đuôi file thật)."""
+    return raw_bytes[:2] == b"PK"
+
+
+def parse_batch_bytes(raw_bytes: bytes) -> list[dict]:
+    """
+    (2026-08-21) Điểm vào DÙNG CHUNG cho batch source là BYTES THÔ không kèm tên file — vd tải
+    về từ URL (Google Drive file tĩnh trỏ tới .xlsx/.csv, hoặc Google Sheets đã rewrite về CSV
+    export qua link_normalizer.py). Tự sniff xlsx (magic bytes ZIP) hay CSV/text rồi gọi đúng
+    parser tương ứng — KHÔNG raise (parse_xlsx_rows/parse_csv_rows đã tự fallback-safe sẵn).
+
+    api/routes.py (upload multipart) vẫn ưu tiên check ĐUÔI FILE thật khi CÓ tên file (đáng
+    tin hơn sniff bytes) — hàm này chỉ cần dùng khi không có tên file để dựa vào.
+    """
+    if _looks_like_xlsx(raw_bytes):
+        return parse_xlsx_rows(raw_bytes)
+    return parse_csv_rows(decode_csv_bytes(raw_bytes))
+
+
 # ---------------------------------------------------------------------------
 # OUTPUT — map DesignComplianceResult về hàng CSV/Excel xuất báo cáo tổng hợp.
 # Tên cột dưới đây CẦN ĐỐI CHIẾU LẠI với file mẫu BGK thật trước khi demo/nộp bài.

@@ -70,6 +70,18 @@ niche_hint: string, optional       // gợi ý niche nếu FE/user đã biết t
   },
 
   positioning_notes: { category: string, location_description: string, citation: string }[],
+  verifications: { category: "logo"|"character"|"celebrity", name: string, present: boolean, reasoning: string }[],
+  // (2026-08-21) Agent 2 xác nhận CÓ/KHÔNG cho từng candidate Agent 1 nêu — hiện ✅/❌, KHÔNG có số/%.
+
+  detected_faces: { bbox_norm: number[4], suspected_name: string|null, confidence: "low"|"medium"|"high"|null, reasoning: string }[],
+  // (2026-08-21) MỌI khuôn mặt BlazeFace phát hiện (kể cả không nhận diện được) — danh sách ĐẦY ĐỦ, tham khảo/debug.
+  // KHÔNG có ảnh crop nào trong response (đã bỏ face_base64) — FE chỉ nên dùng flagged_regions bên dưới để render.
+
+  flagged_regions: { kind: "text"|"face", bbox_norm: number[4], label: string, detail: string }[],
+  // (2026-08-21) MỚI — danh sách RÚT GỌN, CHỈ gồm vùng đáng nghi (text nghi trademark + mặt nhận diện được)
+  // để vẽ khung khoanh vùng lên ẢNH GỐC. bbox_norm luôn là toạ độ THẬT (Python tính), không phải LLM đoán.
+  // ⚠️ field text_regions cũ (MSER) đã BỊ XOÁ khỏi response — KHÔNG còn tồn tại nữa, dùng flagged_regions thay thế.
+
   reasoning: string,                // đoạn văn giải thích verdict, LLM viết dựa trên evidence (không tự đổi verdict)
   fix_suggestions: { violation: string, suggestion: string }[],   // 1 gợi ý sửa / 1 category vi phạm
 
@@ -91,9 +103,22 @@ niche_hint: string, optional       // gợi ý niche nếu FE/user đã biết t
 
 ## 4. Batch — `batch-csv` (multipart, CSV hoặc XLSX) / `batch-json` (JSON, CSV text)
 
-`batch-csv` form fields: `file` (**CSV hoặc XLSX**, bắt buộc — tự nhận theo đuôi file) + `platform`/`target_country`/`max_concurrency` (optional). `batch-json` JSON body: `{csv_content: string, platform?, target_country?, max_concurrency?}` (chỉ nhận CSV text, không nhận XLSX vì XLSX là binary).
+`batch-csv` form fields: `file` (**CSV hoặc XLSX**, bắt buộc — tự nhận theo đuôi file) + `platform`/`target_country`/`max_concurrency` (optional). `batch-json` JSON body: `{csv_content?: string, batch_file_url?: string, platform?, target_country?, max_concurrency?}` — **đúng 1 trong 2** `csv_content` (CSV text dán thẳng, hành vi CŨ) hoặc `batch_file_url` (**MỚI 2026-08-21** — link tới file batch, xem mục 4.1 bên dưới; nhận CẢ CSV lẫn XLSX vì backend tự sniff bytes, không phụ thuộc tên file).
 
-Cột input linh hoạt alias, không phân biệt hoa/thường: `file_path`/`path`/`url`/`link`/`image_url`/**`design`** (cột thật trong file mẫu BGK — tự nhận là url nếu bắt đầu `http`, ngược lại là file_path), `platform`, `target_country`/**`target_market`**, `niche_hint`.
+Cột input linh hoạt alias, không phân biệt hoa/thường: `file_path`/`path`/`url`/`link`/`image_url`/**`design`** (cột thật trong file mẫu BGK — tự nhận là url nếu bắt đầu `http`, ngược lại là file_path — khớp theo TÊN cột, không phụ thuộc vị trí, dù có cột `no` đứng trước hay không), `platform`, `target_country`/**`target_market`**, `niche_hint`.
+
+### 4.1 `batch_file_url` — batch source từ LINK thay vì upload file (MỚI 2026-08-21)
+
+Thay vì phải tải file về rồi upload lại, `batch-json` giờ nhận thẳng 1 link tới file batch — backend tự tải (`link_normalizer.normalize_url_to_bytes`) rồi tự sniff xlsx/csv qua magic bytes (`csv_batch.parse_batch_bytes` — xlsx là file ZIP, luôn bắt đầu `PK`, CSV/text thì không).
+
+**3 loại link đã verify THẬT (không đoán)**:
+1. **Google Sheets link dạng "edit"** (vd `docs.google.com/spreadsheets/d/{id}/edit?gid=...`) — fetch thẳng URL này chỉ ra HTML app ~290KB, KHÔNG phải data (đã test). `link_normalizer.py` giờ tự nhận diện host `docs.google.com` + `/spreadsheets/` và viết lại về `.../export?format=csv&gid={gid}` (gid tách từ URL, mặc định `0` nếu không có) — **verify thật bằng link mẫu BGK, trả về ĐÚNG 30 dòng data thật khớp `design_samples_template.xlsx`** (test qua cả `TestClient` gọi route thật, không chỉ unit test hàm riêng lẻ).
+2. **Google Drive link trỏ tới file .xlsx/.csv tĩnh** — dùng lại nguyên `normalize_url_to_bytes()` đã có sẵn (rewrite `/d/{id}/view` → `uc?export=download&id={id}`), không cần code thêm gì — tải bytes xong tự sniff xlsx/csv như bình thường.
+3. **Dropbox / URL trực tiếp tới file .xlsx/.csv** — tương tự, dùng lại infra link đã có.
+
+**Đã verify (đọc code + test thật) — xlsx "kiểu CSV" (cột `design` là link/path dạng TEXT, KHÔNG dán ảnh nhúng)**: hoạt động đúng từ trước, KHÔNG cần sửa gì — `parse_xlsx_rows()` dùng CHUNG `_normalize_row()` với CSV nên tự nhận url/file_path y hệt, bất kể ảnh có được nhúng hay không. Nhánh đọc `ws._images` (mục 7, log #7) CHỈ kích hoạt khi cell TRỐNG mà có ảnh dán đúng hàng — không xung đột với trường hợp có link text.
+
+⚠️ Row nào không có gì trong cột `design` (như file mẫu BGK gốc hiện tại — cột design đang trống ở cả 30 dòng, kể cả khi lấy trực tiếp từ Google Sheets) vẫn báo `ERROR "Cần cung cấp ít nhất 1 trong 3..."` đúng theo row-level fault isolation — không phải bug, cần điền link/path thật vào cột `design` trước khi chạy để có kết quả thật.
 
 ### Self-grading — có file mẫu THẬT từ BGK
 
@@ -226,6 +251,57 @@ Toàn bộ `compliance_checker/` (10 module + `data/`) đã code, compile, chạ
       chứng minh prompt "thành thật, đừng đoán" hoạt động đúng, không hallucinate tên ngẫu nhiên.
     - Model file + script gốc do người dùng cung cấp, KHÔNG phải Claude tự tải — ghi rõ nguồn
       trong `data/models/manifest.json` theo đúng quy định CLAUDE.md.
+13. **(2026-08-21, phiên sau) OCR THẬT (RapidOCR) + Agent 2 tự "cảm nhận" trademark — người
+    dùng tự cung cấp script (`test_ocr.py`), port vào `engine/opencv_modules.py::
+    extract_text_blocks()` (bỏ phần ghi crop ảnh ra đĩa của script gốc — không cần, xem quyết
+    định TEXT vs ẢNH bên dưới):**
+    - **Quyết định TEXT vs ẢNH crop cho Agent 2** (được giao tự quyết): chọn **TEXT**, không gửi
+      ảnh crop — "đây có phải trademark/slogan nổi tiếng" là bài toán NGÔN NGỮ thuần tuý (khác
+      face identification, việc đó THẬT SỰ cần nhìn ảnh). RapidOCR đã đọc chính xác nội dung
+      chữ, gửi lại ảnh cho Agent 2 tự OCR lần 2 vừa chậm vừa tốn token ảnh vừa dư thừa.
+    - **Agent 2 TASK 3 (MỚI)**: nhận toàn bộ `text_blocks` (index + text, KHÔNG kèm ảnh), tự
+      ghép các block rời rạc (RapidOCR gộp theo hình học, có thể tách/lẫn sai) thành cụm từ +
+      tự đánh giá bằng kiến thức riêng — KHÔNG giới hạn ở `trademark_top1000.json`.
+    - **`trademark_text` giờ có 2 nguồn ĐỘC LẬP**, gộp qua `_combine_category_results` (lấy
+      nặng hơn): (1) `score_trademark_text()` — match database THẬT, nhị phân, KHÔNG đổi; (2)
+      `score_trademark_text_llm_sense()` (MỚI) — cảm nhận riêng Agent 2, dùng thang
+      `_NAME_CONFIDENCE_SCORE` như logo/character/celebrity. ⚠️ **Ngoại lệ có chủ đích** với
+      nguyên tắc CLAUDE.md mục 10 ("LLM không tự quyết GO/NO-GO") — CHỈ áp dụng category này,
+      theo yêu cầu RÕ RÀNG của nhóm: "kể cả text không có trong database mà LLM phát hiện nghi
+      ngờ cao: VẪN FLAG BLOCKED". Python (`_score_numeric_category`) vẫn là nơi CUỐI CÙNG
+      chuyển suspicion (định tính) -> tag (BLOCKED/RISKY/SAFE) qua threshold cứng, LLM chỉ tự
+      đánh giá mức độ, không tự gán tag trực tiếp.
+    - `trademark_resolver.resolve_trademark_phrases()` giờ ưu tiên nhận text từ
+      `extract_text_blocks()` (RapidOCR, chính xác + có bbox thật) thay vì `OCR_text` của Vision
+      — fallback về Vision nếu OpenCV không đọc được chữ nào (model rapidocr chưa cài/ảnh lỗi).
+    - **`DesignComplianceResult.flagged_regions` (MỚI)** — thay thế hoàn toàn cách hiện
+      thumbnail crop riêng: danh sách rút gọn `{kind: "text"|"face", bbox_norm, label, detail}`
+      xây dựng THUẦN PYTHON (`orchestrator._build_flagged_regions`) từ 3 nguồn: match database
+      thật (tìm block chứa đúng phrase), Agent 2 TASK 3 (dùng `block_indexes` trả về), và
+      `detected_faces` đã nhận diện (bỏ qua mặt không nhận diện được). `detected_faces` vẫn giữ
+      trong response (danh sách ĐẦY ĐỦ, tham khảo/debug) nhưng đã **bỏ `face_base64`** — không
+      xuất ảnh crop ra response nữa theo đúng yêu cầu.
+    - `text_regions` (MSER, `detect_text_regions()`) **đã ngừng được gọi** trong orchestrator —
+      hàm vẫn còn trong `opencv_modules.py` (không xoá, phòng fallback không cần rapidocr) nhưng
+      không còn ảnh hưởng pipeline. Field `text_regions` **đã bị xoá khỏi `DesignComplianceResult`**.
+    - **Verify thật bằng ảnh Gen.G banner** (`process_one_design`): RapidOCR đọc đúng text
+      banner, Agent 2 TASK 3 flag "LG UltraGear"/"Logitech G"/"LCH2025 CHAMPIONS" — **verdict
+      đổi từ `RISKY` (baseline cũ) sang `BLOCKED`** vì "LG UltraGear" được Agent 2 tự tin cao
+      nhận ra là trademark thật dù KHÔNG có trong `trademark_top1000.json` — ĐÚNG hành vi mong
+      muốn (không phải bug), chứng minh nhánh "cảm nhận LLM" hoạt động và thật sự ảnh hưởng
+      verdict cuối như yêu cầu.
+    - ⚠️ **Hạn chế phát hiện qua test thật**: RapidOCR gộp TOÀN BỘ text banner (nhiều logo tài
+      trợ khác nhau) vào 1 block hình học duy nhất trên ảnh Gen.G (do chúng nằm sát nhau) — cả
+      3 phrase bị flag đều dùng CHUNG 1 bbox (bbox của block đó), không tách riêng được từng
+      logo. Trung thực nhưng kém chính xác hơn lý tưởng — chấp nhận được vì vẫn đúng khu vực
+      chung, không sai vùng hoàn toàn.
+    - ⚠️ **KHÔNG đụng frontend theo yêu cầu tường minh của người dùng lượt này** — `frontend/
+      app.js` HIỆN TẠI vẫn gọi `renderDetectedFaces(r.detected_faces)` dùng `f.face_base64`
+      (field đã bị xoá -> ảnh vỡ, không phải lỗi JS) và `renderPositioningOverlay` đọc
+      `r.text_regions` (field đã bị xoá, nhưng code FE có `|| []` fallback nên KHÔNG crash, chỉ
+      không còn khung xanh MSER nữa). **Frontend CẦN được cập nhật ở lượt sau** để: (1) bỏ
+      `renderDetectedFaces`, (2) `renderPositioningOverlay` (hoặc hàm mới) đọc `flagged_regions`
+      thay vì `text_regions`/`positioning_notes.bbox_norm` để vẽ khung lên ảnh gốc.
 
 ### Giới hạn còn lại — cần biết trước khi demo
 

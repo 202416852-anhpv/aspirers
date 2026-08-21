@@ -304,7 +304,7 @@ def run_agent1_classify(image_base64: "str | list[str]", niche_taxonomy: "dict |
 # mục — mục đích giảm false positive từ việc Agent 1 đoán rộng tay (top 5 luôn liệt kê kể cả
 # không chắc). Đây KHÔNG phải 1 lượt detect mới — prompt cấm tự thêm mục ngoài danh sách.
 
-def _build_agent2_prompt(candidates: dict, num_face_crops: int) -> tuple[str, str]:
+def _build_agent2_prompt(candidates: dict, num_face_crops: int, text_blocks: "list[dict] | None" = None) -> tuple[str, str]:
     lines = []
     for item in candidates.get("logos", []) or []:
         name = str(item.get("brand_name", "")).strip()
@@ -342,7 +342,7 @@ For each candidate, decide:
 - "reasoning": one short sentence.
 
 Echo the "name" and "category" fields EXACTLY as given above (do not rephrase/translate them)."""
-        verify_shape = '"verifications": [{"category": "logo", "name": "nike", "present": true, "reasoning": "The swoosh logo is clearly visible on the chest."}],'
+        verify_shape = '"verifications": [{"category": "logo", "name": "nike", "present": true, "reasoning": "The swoosh logo is clearly visible on the chest."}]'
 
     face_task = ""
     face_shape = ""
@@ -368,8 +368,46 @@ For each face crop, output:
 - "reasoning": one short sentence"""
         face_shape = '"face_identifications": [{"face_index": 0, "suspected_name": "Cristiano Ronaldo", "confidence": "medium", "reasoning": "Strong facial resemblance, well-known athlete."}]'
 
+    text_task = ""
+    text_shape = ""
+    if text_blocks:
+        blocks_text = "\n".join(f'{i}: "{b.get("text", "")}"' for i, b in enumerate(text_blocks))
+        text_task = f"""
+
+TASK 3 — TRADEMARK / SLOGAN SENSE-CHECK (TEXT ONLY, no image needed for this task): below is a
+list of TEXT BLOCKS extracted by an OCR engine from the design. OCR grouping is geometric and
+imperfect — a single slogan may have been split across multiple blocks, or blocks may contain
+OCR noise/misreads.
+
+1. Read through ALL blocks together. If fragments across DIFFERENT blocks look like they form
+   one phrase/slogan when joined, mentally reconstruct it yourself.
+2. Using your OWN knowledge (you are NOT limited to any fixed database — a separate deterministic
+   database check already runs independently in Python, this is purely YOUR judgment as a second,
+   independent opinion), judge whether any reconstructed phrase is a well-known trademarked
+   slogan, brand name, or copyrighted phrase that would cause real IP risk if sold on a
+   Print-on-Demand product.
+3. Flag anything you are genuinely suspicious of — including a phrase that closely imitates/
+   references a famous brand even if you can't pin the exact source. Skip clearly generic/safe
+   text (plain product descriptions, random words) — do NOT enumerate every block, only flagged ones.
+
+📌 TEXT BLOCKS (block_index: text):
+{blocks_text}
+
+For each flagged item, output:
+- "block_indexes": list of the block_index value(s) involved (usually just one; multiple only
+  if you joined fragments across blocks)
+- "phrase": the reconstructed phrase/text you are flagging (your best reconstruction, not
+  necessarily verbatim from one block)
+- "suspicion": "high"/"medium"/"low" — "high" means you are quite confident this is a real,
+  recognizable trademarked phrase/slogan (this will be treated as seriously as a real database
+  match, even with zero database evidence — so only use "high" when you are genuinely sure)
+- "reasoning": one short sentence"""
+        text_shape = '"text_trademark_flags": [{"block_indexes": [0], "phrase": "Just Do It", "suspicion": "high", "reasoning": "Iconic Nike slogan, globally recognizable."}]'
+
+    all_shapes = ",\n  ".join(s for s in (verify_shape, face_shape, text_shape) if s)
+
     system_prompt = f"""You are a Verification Specialist for a Print-on-Demand IP compliance system.
-{verify_task}{face_task}
+{verify_task}{face_task}{text_task}
 
 📌 If multiple design images are provided (marked "--- Trang N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission covering all pages.
 
@@ -377,33 +415,46 @@ For each face crop, output:
 
 REQUIRED JSON SHAPE:
 {{
-  {verify_shape}
-  {face_shape}
+  {all_shapes}
 }}"""
     user_prompt = "Complete the task(s) above against the image(s) shown, in order."
     return system_prompt, user_prompt
 
 
-def run_agent2_verify_candidates(image_base64: "str | list[str]", candidates: dict, face_crops: "list[dict] | None" = None) -> dict:
+def run_agent2_verify_candidates(
+    image_base64: "str | list[str]",
+    candidates: dict,
+    face_crops: "list[dict] | None" = None,
+    text_blocks: "list[dict] | None" = None,
+) -> dict:
     """
     candidates: {"logos": [{"brand_name","confidence"}], "characters": [{"name","confidence"}],
     "celebrities": [{"name","confidence"}]} — lấy trực tiếp từ suspected_logos/suspected_characters/
     suspected_celebrities của run_agent1_classify().
 
-    face_crops: (2026-08-21, MỚI) output opencv_modules.detect_and_crop_faces()["faces"] —
+    face_crops: (2026-08-21) output opencv_modules.detect_and_crop_faces()["faces"] —
     [{"face_base64","bbox_norm","detection_score"}, ...]. Model BlazeFace CHỈ detect vị trí mặt,
     KHÔNG định danh — ảnh crop được gửi thẳng cho Agent 2 (Claude Vision) tự nhận diện trực
     tiếp, KHÔNG đối chiếu database (quyết định của nhóm, xem docs.md).
 
-    Không có candidate NÀO và không có face_crop NÀO -> khỏi tốn 1 lần gọi LLM, trả rỗng luôn.
+    text_blocks: (2026-08-21, MỚI) output opencv_modules.extract_text_blocks()["text_blocks"] —
+    [{"bbox_norm","text","ocr_confidence"}, ...]. CHỈ gửi TEXT (không gửi ảnh crop cho task
+    này) — quyết định có chủ đích để tối ưu tốc độ/chi phí: đánh giá "đây có phải trademark/
+    slogan nổi tiếng không" là bài toán NGÔN NGỮ thuần tuý, không cần nhìn ảnh (khác face
+    identification — việc đó THẬT SỰ cần nhìn). Agent 2 tự ghép các block rời rạc thành câu
+    + vừa so khớp cảm nhận riêng, vừa để Python (trademark_resolver.py, không đổi) so khớp
+    database độc lập — 2 nguồn gộp qua black_box.py::_combine_category_results.
+
+    Không có candidate/face_crop/text_block NÀO -> khỏi tốn 1 lần gọi LLM, trả rỗng luôn.
     """
     candidates = candidates or {}
     face_crops = face_crops or []
+    text_blocks = text_blocks or []
     has_candidates = any(candidates.get(k) for k in ("logos", "characters", "celebrities"))
-    if not has_candidates and not face_crops:
-        return {"verifications": [], "face_identifications": []}
+    if not has_candidates and not face_crops and not text_blocks:
+        return {"verifications": [], "face_identifications": [], "text_trademark_flags": []}
 
-    system_prompt, user_prompt = _build_agent2_prompt(candidates, len(face_crops))
+    system_prompt, user_prompt = _build_agent2_prompt(candidates, len(face_crops), text_blocks)
 
     # Ảnh thiết kế gốc (1 hoặc nhiều trang) đi TRƯỚC, ảnh mặt crop đi SAU — nhãn riêng cho từng
     # loại để Agent 2 không nhầm "trang thiết kế" với "ảnh mặt cắt" (xem _build_messages labels).
@@ -458,7 +509,25 @@ def run_agent2_verify_candidates(image_base64: "str | list[str]", candidates: di
             "reasoning": str(item.get("reasoning", "")),
         })
 
-    return {"verifications": clean_verifications, "face_identifications": clean_faces}
+    raw_text_flags = raw.get("text_trademark_flags") if isinstance(raw.get("text_trademark_flags"), list) else []
+    clean_text_flags = []
+    for item in raw_text_flags:
+        if not isinstance(item, dict):
+            continue
+        phrase = str(item.get("phrase", "")).strip()
+        suspicion = item.get("suspicion")
+        if not phrase or suspicion not in ("low", "medium", "high"):
+            continue
+        raw_indexes = item.get("block_indexes")
+        indexes = [int(i) for i in raw_indexes if isinstance(i, (int, float))] if isinstance(raw_indexes, list) else []
+        clean_text_flags.append({
+            "block_indexes": indexes,
+            "phrase": phrase,
+            "suspicion": suspicion,
+            "reasoning": str(item.get("reasoning", "")),
+        })
+
+    return {"verifications": clean_verifications, "face_identifications": clean_faces, "text_trademark_flags": clean_text_flags}
 
 
 # =====================================================================

@@ -50,41 +50,77 @@ def _safe_or_default(value, default, label: str, warnings: list):
     return value if value is not None else default
 
 
-def _inject_text_region_bbox(positioning_notes: list, text_regions: list) -> list:
-    """Gắn bbox_norm THẬT (Python, KHÔNG phải LLM đoán) vào positioning_note category=
-    'trademark_text', dùng vùng chữ LỚN NHẤT phát hiện được bởi opencv_modules.detect_text_regions()
-    (đã sort giảm dần theo area_ratio). Best-effort: nếu ảnh có nhiều dòng chữ khác nhau, vùng
-    lớn nhất không chắc chắn là ĐÚNG cụm từ bị flag — vẫn hữu ích để định hướng trực quan, và
-    trung thực hơn hẳn để LLM tự đoán toạ độ pixel (CLAUDE.md: Vision không đáng tin ở mức đó).
-    Không có text_regions -> giữ nguyên location_description bằng lời, không thêm bbox."""
-    if not text_regions:
-        return positioning_notes
-    largest = text_regions[0]
-    for note in positioning_notes:
-        if note.get("category") == "trademark_text":
-            note["bbox_norm"] = largest["bbox_norm"]
-            note["bbox_source"] = "opencv_mser"
-    return positioning_notes
-
-
 def _merge_detected_faces(face_crops: list, face_identifications: list) -> list:
-    """(2026-08-21) Ghép opencv_modules.detect_and_crop_faces()["faces"] (face_base64/bbox_norm,
-    theo thứ tự index gửi cho Agent 2) với agents.py::run_agent2_verify_candidates()
-    ["face_identifications"] (face_index/suspected_name/confidence/reasoning) thành shape CUỐI
-    cho FE (schemas.DetectedFace) — CỐ Ý bỏ "detection_score" (độ tin cậy CÓ-PHẢI-MẶT của
-    BlazeFace, khác hẳn ý nghĩa với "confidence" nhận diện danh tính của Agent 2, giữ 2 khái
-    niệm lẫn nhau sẽ gây hiểu nhầm) — chỉ dùng nội bộ để sort/chọn top N ở opencv_modules.py."""
+    """(2026-08-21) Ghép opencv_modules.detect_and_crop_faces()["faces"] (bbox_norm, theo thứ
+    tự index gửi cho Agent 2) với agents.py::run_agent2_verify_candidates()["face_identifications"]
+    (face_index/suspected_name/confidence/reasoning) thành shape CUỐI cho FE (schemas.DetectedFace).
+    CỐ Ý bỏ "face_base64" (không xuất khuôn mặt crop ra FE nữa, chỉ dùng nội bộ để gửi Agent 2 —
+    xem run_agent2_verify_candidates, KHÔNG lộ ra response cuối) và "detection_score" (độ tin
+    cậy CÓ-PHẢI-MẶT của BlazeFace, khác hẳn "confidence" nhận diện danh tính của Agent 2, giữ 2
+    khái niệm lẫn nhau sẽ gây hiểu nhầm — detection_score chỉ dùng nội bộ opencv_modules.py)."""
     by_index = {f["face_index"]: f for f in (face_identifications or []) if "face_index" in f}
     out = []
     for i, crop in enumerate(face_crops or []):
         ident = by_index.get(i, {})
         out.append({
-            "face_base64": crop.get("face_base64", ""),
             "bbox_norm": crop.get("bbox_norm", []),
             "suspected_name": ident.get("suspected_name"),
             "confidence": ident.get("confidence"),
             "reasoning": ident.get("reasoning", ""),
         })
+    return out
+
+
+def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_trademark_flags: list, detected_faces: list) -> list:
+    """
+    (2026-08-21) Xây dựng schemas.FlaggedRegion — danh sách RÚT GỌN, CHỈ gồm vùng đáng nghi để
+    FE vẽ khung khoanh vùng lên ẢNH GỐC (thay thế hoàn toàn cách hiện thumbnail crop riêng
+    trước đây). THUẦN PYTHON, bbox_norm luôn lấy từ dữ liệu THẬT (text_blocks/detected_faces đã
+    có toạ độ chính xác) — KHÔNG bao giờ để LLM tự đoán toạ độ.
+
+    3 nguồn gộp chung:
+    1. trademark_flags (Python match database THẬT, static/live — KHÔNG đổi) — tìm block chứa
+       đúng phrase đã match (substring, case-insensitive) để lấy bbox; không tìm được thì bỏ
+       qua (KHÔNG đoán bbox — thà thiếu box còn hơn box sai).
+    2. text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) — dùng thẳng block_indexes Agent
+       2 đã trả về, khớp với text_blocks theo đúng index đã gửi.
+    3. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
+       nhận diện được, tránh khoanh vùng những mặt vô hại).
+    """
+    out = []
+    for f in trademark_flags or []:
+        phrase = (f.get("phrase") or "").strip().lower()
+        if not phrase or f.get("source") not in ("static", "live_exact", "live_fuzzy"):
+            continue
+        for block in text_blocks or []:
+            block_text = (block.get("text") or "").lower().replace("\n", " ")
+            if phrase in block_text:
+                out.append({
+                    "kind": "text",
+                    "bbox_norm": block["bbox_norm"],
+                    "label": f.get("phrase", ""),
+                    "detail": "Trùng khớp database" + (f" (chủ sở hữu: {f.get('owner')})" if f.get("owner") else ""),
+                })
+                break  # 1 block khớp đầu tiên là đủ, tránh box trùng lặp cho cùng 1 phrase
+
+    for flag in text_trademark_flags or []:
+        for idx in flag.get("block_indexes") or []:
+            if isinstance(idx, int) and 0 <= idx < len(text_blocks or []):
+                out.append({
+                    "kind": "text",
+                    "bbox_norm": text_blocks[idx]["bbox_norm"],
+                    "label": flag.get("phrase", ""),
+                    "detail": flag.get("reasoning", ""),
+                })
+
+    for face in detected_faces or []:
+        if face.get("suspected_name"):
+            out.append({
+                "kind": "face",
+                "bbox_norm": face.get("bbox_norm", []),
+                "label": face["suspected_name"],
+                "detail": face.get("reasoning", ""),
+            })
     return out
 
 
@@ -183,10 +219,11 @@ async def process_one_design(
 
     try:
         # ---- Call 1: Agent 1 Classify (TUẦN TỰ bắt buộc — Call 2 cần niche/OCR từ đây) ----
-        # detect_and_crop_faces (BlazeFace, 2026-08-21): KHÔNG phụ thuộc classify (chỉ cần
-        # local_path, đã có sẵn) -> kick off CONCURRENT với Agent 1 để không cộng dồn latency
-        # (crop mặt xong trước khi Agent 2 cần tới, xem bên dưới).
+        # detect_and_crop_faces (BlazeFace) + extract_text_blocks (RapidOCR, 2026-08-21):
+        # KHÔNG phụ thuộc classify (chỉ cần local_path, đã có sẵn) -> kick off CONCURRENT với
+        # Agent 1 để không cộng dồn latency (xong trước khi Agent 2/trademark cần tới, bên dưới).
         face_crop_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_and_crop_faces, local_path))
+        text_blocks_task = asyncio.create_task(asyncio.to_thread(cc_opencv.extract_text_blocks, local_path))
         classify = await asyncio.to_thread(cc_agents.run_agent1_classify, vision_images)
 
         if pdf_meta and pdf_meta.get("pdf_type") == "digital_native" and pdf_meta.get("all_pages_native_text"):
@@ -200,9 +237,6 @@ async def process_one_design(
         niche = niche_hint or classify["niche"]
 
         # ---- Mọi nhánh KHÔNG phụ thuộc lẫn nhau trong CÙNG 1 design -> chạy SONG SONG ----
-        # detect_text_regions: OpenCV cổ điển (MSER, không model/dataset) — thay hướng
-        # match_character/match_logo embedding đã bị bỏ (quá khó trong thời gian hackathon),
-        # dùng để khoanh vùng chữ THẬT trên ảnh thay cho mô tả grid 3x3 bằng lời của Nhóm C.
         # Agent 2 (2026-08-21, THIẾT KẾ LẠI): không còn tự detect character/celebrity — giờ
         # verify lại đúng candidate Agent 1 đã nêu (logo+character+celebrity gộp chung, xem
         # agents.py::run_agent2_verify_candidates). Vẫn chạy song song ở đây vì chỉ phụ thuộc
@@ -212,26 +246,41 @@ async def process_one_design(
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
         }
-        # face_crop_task đã chạy song song từ lúc classify bắt đầu — await ở đây để lấy crop
-        # THẬT (bytes ảnh) truyền cho Agent 2 nhận diện (agents.py::run_agent2_verify_candidates
-        # TASK 2). Lỗi ở nhánh này KHÔNG được làm sập cả design (fail-open, giống mọi nhánh khác).
+        # face_crop_task/text_blocks_task đã chạy song song từ lúc classify bắt đầu — await ở
+        # đây để lấy dữ liệu THẬT (crop mặt/text OCR) truyền cho Agent 2 + trademark_resolver.
+        # Lỗi ở 2 nhánh này KHÔNG được làm sập cả design (fail-open, giống mọi nhánh khác).
         try:
             face_crops_result = await face_crop_task
         except Exception as e:
             face_crops_result = e
         face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
 
-        agent2_result, logo_match, char_match, trademark_flags, market, text_regions_result = await asyncio.gather(
-            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"]),
+        try:
+            text_blocks_result = await text_blocks_task
+        except Exception as e:
+            text_blocks_result = e
+        text_blocks_result = _safe_or_default(text_blocks_result, {"text_blocks": []}, "extract_text_blocks", warnings)
+        text_blocks = text_blocks_result["text_blocks"]
+
+        # Trademark matching (Python, database THẬT) giờ ưu tiên dùng text OCR từ OpenCV
+        # (RapidOCR, extract_text_blocks — đọc chính xác hơn + có bbox thật cho từng cụm chữ)
+        # thay vì OCR_text của Vision (Agent 1) — chỉ fallback về Vision khi OpenCV không đọc
+        # được chữ nào (vd model rapidocr chưa cài, hoặc ảnh không có chữ dạng OpenCV nhận ra).
+        ocr_block_text = "\n".join(b["text"] for b in text_blocks) if text_blocks else ""
+        trademark_source_text = ocr_block_text or classify["OCR_text"]
+
+        agent2_result, logo_match, char_match, trademark_flags, market = await asyncio.gather(
+            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], text_blocks),
             asyncio.to_thread(cc_opencv.match_logo, local_path, {"suspected_logos": classify["suspected_logos"]}),
             asyncio.to_thread(cc_opencv.match_character, local_path),
-            cc_trademark.resolve_trademark_phrases(classify["OCR_text"], niche),
+            cc_trademark.resolve_trademark_phrases(trademark_source_text, niche),
             asyncio.to_thread(cc_agents.run_agent4_market_suggestion, niche, classify["style"], target_country, platform),
-            asyncio.to_thread(cc_opencv.detect_text_regions, local_path),
             return_exceptions=True,
         )
 
-        agent2_result = _safe_or_default(agent2_result, {"verifications": [], "face_identifications": []}, "Agent 2", warnings)
+        agent2_result = _safe_or_default(
+            agent2_result, {"verifications": [], "face_identifications": [], "text_trademark_flags": []}, "Agent 2", warnings
+        )
         logo_match = _safe_or_default(logo_match, {"matches": []}, "match_logo", warnings)
         char_match = _safe_or_default(char_match, {"matches": []}, "match_character", warnings)
         trademark_flags = _safe_or_default(trademark_flags, [], "trademark_resolver", warnings)
@@ -241,7 +290,6 @@ async def process_one_design(
              "selected_platform_suitable": None, "selected_platform_rationale": ""},
             "Agent 4", warnings
         )
-        text_regions_result = _safe_or_default(text_regions_result, {"text_regions": []}, "detect_text_regions", warnings)
 
         # ---- Black Box: Python thuần, tức thời, quyết định verdict ----
         # Truyền thêm suspected_logos/suspected_characters/suspected_celebrities (Agent 1/2) để
@@ -257,6 +305,7 @@ async def process_one_design(
             suspected_logos=classify["suspected_logos"],
             agent2_verifications=agent2_result["verifications"],
             face_identifications=agent2_result["face_identifications"],
+            text_trademark_flags=agent2_result["text_trademark_flags"],
         )
 
         # ---- Nhóm C: tổng hợp + định vị (1 LLM call) ----
@@ -265,6 +314,7 @@ async def process_one_design(
             "suspected_characters": classify["suspected_characters"],
             "suspected_celebrities": classify["suspected_celebrities"],
             "agent2_verifications": agent2_result["verifications"],
+            "text_trademark_flags": agent2_result["text_trademark_flags"],
             "logo_match": logo_match, "char_match": char_match,
             "trademark_flags": trademark_flags,
         }
@@ -272,15 +322,16 @@ async def process_one_design(
             cc_agents.run_group_c_synthesis, evidence_bundle,
             pdf_meta.get("text_blocks_with_bbox") if pdf_meta else None,
         )
-        # Gắn toạ độ THẬT (Python, không phải LLM đoán) vào positioning_note category=
-        # trademark_text nếu OpenCV tìm được vùng chữ — best-effort (vùng LỚN NHẤT phát hiện
-        # được), xem docstring opencv_modules.detect_text_regions() về giới hạn của cách này.
-        positioning["positioning_notes"] = _inject_text_region_bbox(
-            positioning["positioning_notes"], text_regions_result["text_regions"]
-        )
 
         # ---- Agent 3: reasoning + fix suggestion — CHẠY SAU black box (cần biết verdict) ----
         agent3_result = await asyncio.to_thread(cc_agents.run_agent3_reasoning, vision_images, black_box_result, positioning)
+
+        # flagged_regions: khoanh vùng THẬT (Python, KHÔNG LLM đoán toạ độ) cho cả text lẫn mặt
+        # đáng nghi — thay thế hoàn toàn cách hiện thumbnail crop riêng trước đây.
+        detected_faces_merged = _merge_detected_faces(face_crops_result["faces"], agent2_result["face_identifications"])
+        flagged_regions = _build_flagged_regions(
+            text_blocks, trademark_flags, agent2_result["text_trademark_flags"], detected_faces_merged
+        )
 
         return {
             "niche": niche,
@@ -295,8 +346,8 @@ async def process_one_design(
             "overall_confidence": black_box_result["overall_confidence"],
             "evidence": black_box_result["evidence"],
             "positioning_notes": positioning["positioning_notes"],
-            "text_regions": text_regions_result["text_regions"],
-            "detected_faces": _merge_detected_faces(face_crops_result["faces"], agent2_result["face_identifications"]),
+            "detected_faces": detected_faces_merged,
+            "flagged_regions": flagged_regions,
             "reasoning": agent3_result["reasoning"],
             "fix_suggestions": agent3_result["fix_suggestions"],
             "market_suggestion": market,

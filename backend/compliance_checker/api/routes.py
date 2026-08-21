@@ -16,7 +16,8 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from compliance_checker.schemas import ComplianceCheckRequest, ComplianceBatchRequest, DesignComplianceResult, BatchReport
 from compliance_checker.orchestrator import process_one_design, process_batch
-from compliance_checker.ingestion.csv_batch import parse_csv_rows, parse_xlsx_rows, batch_row_to_csv_dict, write_batch_csv, decode_csv_bytes
+from compliance_checker.ingestion.csv_batch import parse_csv_rows, parse_xlsx_rows, parse_batch_bytes, batch_row_to_csv_dict, write_batch_csv, decode_csv_bytes
+from compliance_checker.ingestion.link_normalizer import normalize_url_to_bytes
 
 router = APIRouter(prefix="/api/compliance")
 
@@ -114,12 +115,27 @@ async def compliance_batch_csv(
 
 @router.post("/batch-json", response_model=BatchReport)
 async def compliance_batch_json(req: ComplianceBatchRequest):
-    """Bản JSON body (thay vì multipart) của batch-csv — cho FE/giám khảo tự paste nội dung
-    CSV dạng text thẳng vào JSON, không cần dựng multipart form."""
+    """
+    Bản JSON body (thay vì multipart) của batch-csv — cho FE/giám khảo tự paste nội dung CSV
+    dạng text thẳng vào JSON, không cần dựng multipart form.
+
+    (2026-08-21) Đúng 1 trong 2: `csv_content` (text thô, hành vi CŨ không đổi) HOẶC
+    `batch_file_url` (MỚI) — link tới file batch (Google Drive file tĩnh .xlsx/.csv, Google
+    Sheets link "edit", Dropbox, hoặc URL trực tiếp) — backend tự tải bằng
+    normalize_url_to_bytes() (link_normalizer.py, tự rewrite Drive/Sheets/Dropbox đúng dạng
+    tải trực tiếp) rồi tự sniff xlsx/csv qua magic bytes (parse_batch_bytes, csv_batch.py) vì
+    link không luôn có đuôi file rõ ràng để dựa vào.
+    """
     try:
-        rows = parse_csv_rows(req.csv_content)
+        if req.batch_file_url:
+            raw_bytes = await normalize_url_to_bytes(req.batch_file_url)
+            rows = parse_batch_bytes(raw_bytes)
+        elif req.csv_content:
+            rows = parse_csv_rows(req.csv_content)
+        else:
+            raise HTTPException(status_code=422, detail="Cần đúng 1 trong 2: csv_content hoặc batch_file_url")
         if not rows:
-            raise HTTPException(status_code=422, detail="csv_content rỗng hoặc không đọc được dòng nào.")
+            raise HTTPException(status_code=422, detail="Nguồn batch rỗng hoặc không đọc được dòng nào (kiểm tra đúng định dạng/quyền truy cập link).")
         return await process_batch(
             rows, platform=req.platform, target_country=req.target_country or "US", max_concurrency=req.max_concurrency
         )

@@ -90,9 +90,25 @@ class FaceIdentification(BaseModel):
     reasoning: str = Field(default="", description="1 câu giải thích ngắn")
 
 
+# (2026-08-21) TRADEMARK/SLOGAN SENSE-CHECK — nhánh MỚI thứ 3 của Agent 2, TEXT-ONLY (không
+# cần ảnh — quyết định có chủ đích để tối ưu tốc độ/chi phí, xem agents.py::
+# run_agent2_verify_candidates). Nhận text_blocks từ engine/opencv_modules.py::
+# extract_text_blocks() (RapidOCR thật, có nội dung + bbox), Agent 2 tự ghép các block rời
+# rạc + tự đánh giá bằng kiến thức riêng — KHÔNG giới hạn ở database tĩnh. Đây là nguồn THỨ 2,
+# ĐỘC LẬP cho category trademark_text (nguồn 1 là match database THẬT, không đổi) — xem
+# black_box.py::score_trademark_text_llm_sense(). Theo quyết định RÕ RÀNG của nhóm: suspicion
+# "high" CÓ THỂ tự BLOCKED dù KHÔNG có bằng chứng database nào.
+class TextTrademarkFlag(BaseModel):
+    block_indexes: List[int] = Field(default_factory=list, description="block_index (trong text_blocks gửi cho Agent 2) mà Agent 2 dùng để ghép/nghi ngờ")
+    phrase: str = Field(..., description="Cụm từ Agent 2 tự ghép nối/nghi ngờ — không nhất thiết verbatim từ 1 block duy nhất")
+    suspicion: Confidence = Field(..., description="Mức nghi ngờ ĐỊNH TÍNH của riêng Agent 2 — KHÔNG phải kết quả tra database")
+    reasoning: str = Field(default="")
+
+
 class Agent2Result(BaseModel):
     verifications: List[VerificationItem] = Field(default_factory=list)
     face_identifications: List[FaceIdentification] = Field(default_factory=list)
+    text_trademark_flags: List[TextTrademarkFlag] = Field(default_factory=list)
 
 
 # =====================================================================
@@ -198,14 +214,27 @@ class TextRegion(BaseModel):
 
 
 class DetectedFace(BaseModel):
-    """(2026-08-21) Merge của opencv_modules.detect_and_crop_faces() (bbox_norm + ảnh crop)
-    và Agent2Result.face_identifications (suspected_name + confidence) — orchestrator.py ghép
-    2 nguồn theo face_index, đây là shape CUỐI trả về cho FE (không phải shape thô nội bộ)."""
-    face_base64: str = Field(..., description="Ảnh khuôn mặt đã crop (JPEG base64) — để FE hiện thumbnail")
+    """(2026-08-21) Merge của opencv_modules.detect_and_crop_faces() (bbox_norm) và
+    Agent2Result.face_identifications (suspected_name + confidence) — orchestrator.py ghép 2
+    nguồn theo face_index. Danh sách ĐẦY ĐỦ (kể cả mặt KHÔNG nhận diện được) để tham khảo/debug
+    — FE KHÔNG hiện trực tiếp danh sách này nữa (không còn thumbnail crop), chỉ dùng
+    flagged_regions bên dưới để vẽ overlay lên ảnh gốc. KHÔNG có field ảnh nào (face_base64 đã
+    bỏ theo yêu cầu — không xuất khuôn mặt crop ra FE nữa)."""
     bbox_norm: List[float] = Field(..., description="[x0,y0,x1,y1] normalize 0-1 trên ảnh GỐC (chưa crop)")
     suspected_name: Optional[str] = Field(default=None, description="None nếu Agent 2 không nhận ra đây là ai cụ thể")
     confidence: Optional[Confidence] = Field(default=None, description="low/medium/high — KHÔNG có field số/% nào, đúng yêu cầu UI")
     reasoning: str = Field(default="")
+
+
+class FlaggedRegion(BaseModel):
+    """(2026-08-21) Danh sách RÚT GỌN, CHỈ gồm vùng ĐÁNG NGHI trên ảnh gốc (text nghi trademark
+    HOẶC mặt Agent 2 nhận diện được) — để FE vẽ khung khoanh vùng thẳng lên ảnh gốc, KHÔNG còn
+    hiện thumbnail crop riêng (theo đúng yêu cầu). Xây dựng THUẦN PYTHON (orchestrator.py) từ
+    text_trademark_flags + detected_faces đã có bbox thật — KHÔNG phải LLM tự đoán toạ độ."""
+    kind: Literal["text", "face"]
+    bbox_norm: List[float] = Field(..., description="[x0,y0,x1,y1] normalize 0-1 trên ảnh GỐC")
+    label: str = Field(..., description="kind=text: cụm từ bị nghi ngờ. kind=face: tên người bị nghi ngờ.")
+    detail: str = Field(default="", description="Lý do/reasoning ngắn gọn")
 
 
 # =====================================================================
@@ -268,17 +297,17 @@ class DesignComplianceResult(BaseModel):
     evidence: dict[str, CategoryResult] = Field(default_factory=dict)
 
     positioning_notes: List[PositioningNote] = Field(default_factory=list)
-    text_regions: List[TextRegion] = Field(
-        default_factory=list,
-        description="Toàn bộ vùng có khả năng chứa chữ phát hiện bằng OpenCV (MSER) trên ảnh raster "
-                    "đang xử lý — tín hiệu hình học chung, KHÔNG gắn với 1 category cụ thể (khác "
-                    "positioning_notes[].bbox_norm, vốn chỉ gắn cho category trademark_text khi match được)."
-    )
     detected_faces: List[DetectedFace] = Field(
         default_factory=list,
-        description="(2026-08-21) Mọi khuôn mặt BlazeFace phát hiện được, kèm Agent 2 tự nhận diện "
-                    "(không đối chiếu database) — FE hiện thumbnail + tên nghi ngờ + confidence "
-                    "định tính, KHÔNG có số/%."
+        description="(2026-08-21) Mọi khuôn mặt BlazeFace phát hiện được (kể cả không nhận diện "
+                    "được), kèm Agent 2 tự nhận diện — danh sách ĐẦY ĐỦ, tham khảo/debug. FE dùng "
+                    "flagged_regions bên dưới để vẽ overlay, KHÔNG render danh sách này trực tiếp."
+    )
+    flagged_regions: List[FlaggedRegion] = Field(
+        default_factory=list,
+        description="(2026-08-21) Danh sách RÚT GỌN vùng đáng nghi (text + face gộp chung) để FE "
+                    "vẽ khung khoanh vùng lên ẢNH GỐC — thay thế hoàn toàn cách hiện thumbnail crop "
+                    "riêng trước đây, đúng yêu cầu 'chỉ đưa ảnh gốc ra giao diện + khoanh vùng'."
     )
     reasoning: str = ""
     fix_suggestions: List[FixSuggestion] = Field(default_factory=list)
@@ -348,8 +377,18 @@ class ComplianceCheckRequest(BaseModel):
 
 
 class ComplianceBatchRequest(BaseModel):
-    """[FE-FACING REQUEST] Batch qua CSV — FE đọc file CSV thành text rồi gửi nguyên văn lên."""
-    csv_content: str = Field(..., description="Nội dung file CSV dạng text thô (đọc bằng utf-8-sig phía backend)")
+    """[FE-FACING REQUEST] Batch qua CSV — đúng 1 trong 2: FE đọc file CSV thành text rồi gửi
+    nguyên văn lên (csv_content), HOẶC đưa link tới file batch để backend tự tải
+    (batch_file_url, MỚI 2026-08-21) — validate ở tầng route (api/routes.py), không validate
+    cứng ở Pydantic để giữ thông báo lỗi rõ ràng hơn "field required"."""
+    csv_content: Optional[str] = Field(default=None, description="Nội dung file CSV dạng text thô (đọc bằng utf-8-sig phía backend)")
+    batch_file_url: Optional[str] = Field(
+        default=None,
+        description="(MỚI) Link tới file batch — Google Drive (trỏ .xlsx/.csv tĩnh), Google Sheets "
+                    "(link 'edit', tự rewrite về CSV export đúng sheet/gid), Dropbox, hoặc URL trực "
+                    "tiếp .xlsx/.csv. Backend tự tải bằng httpx rồi tự nhận diện xlsx/csv qua magic "
+                    "bytes (không dựa vào tên file vì link không luôn có đuôi rõ ràng)."
+    )
     platform: Optional[str] = Field(default=None)
     target_country: Optional[str] = Field(default="US")
     max_concurrency: int = Field(default=5, ge=1, le=20)

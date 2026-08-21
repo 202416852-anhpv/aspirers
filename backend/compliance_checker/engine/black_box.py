@@ -20,8 +20,11 @@ CATEGORY_THRESHOLDS = {
     # celebrity_list.md nhưng bảng threshold gốc không có category riêng cho việc này —
     # bổ sung ở đây, chặt hơn character_similarity 1 chút vì thêm rủi ro chính sách nền
     # tảng/quyền riêng tư quanh người thật (không chỉ IP thuần tuý như nhân vật hư cấu).
-    # trademark_text: nhị phân, xử lý riêng trong _score_trademark_text() bên dưới
-    # (không dùng blocked_min/risky_min theo thang điểm số như 4 category trên)
+    "trademark_text":       {"blocked_min": 85, "risky_min": 55},   # (2026-08-21) CHỈ dùng cho
+    # score_trademark_text_llm_sense() bên dưới — nguồn "cảm nhận LLM" MỚI, dùng chung thang
+    # _NAME_CONFIDENCE_SCORE (high=92/medium=72/low=45) như logo/character/celebrity. Match
+    # database THẬT (score_trademark_text() ở trên, KHÔNG đổi) vẫn nhị phân riêng như cũ,
+    # KHÔNG dùng bảng này — 2 nguồn gộp qua _combine_category_results (xem run_black_box()).
 }
 
 _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE = 95.0
@@ -119,6 +122,31 @@ def score_trademark_text(trademark_flags: list) -> dict:
     # vì thiếu USPTO_API_KEY) -> KHÔNG đủ căn cứ tự tin RISKY, để SAFE ở verdict nhưng vẫn có
     # trong evidence_bundle thô cho Nhóm C ghi chú khuyến nghị review thủ công.
     return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
+
+
+def score_trademark_text_llm_sense(text_trademark_flags: "list | None") -> dict:
+    """
+    (2026-08-21) Nguồn THỨ 2, ĐỘC LẬP cho trademark_text — "cảm nhận" riêng của Agent 2
+    (agents.py::run_agent2_verify_candidates TASK 3), KHÁC HẲN score_trademark_text() ở trên
+    (đối chiếu database tĩnh/live THẬT, nhị phân, Python thuần). Theo quyết định RÕ RÀNG của
+    nhóm: "kể cả text không có trong database mà LLM phát hiện nghi ngờ cao: VẪN FLAG BLOCKED
+    như bình thường" — ĐÂY LÀ NGOẠI LỆ có chủ đích với nguyên tắc CLAUDE.md mục 10 ("KHÔNG để
+    LLM tự quyết định GO/NO-GO nhị phân") CHỈ áp dụng cho category này, không áp dụng category
+    khác — Python (hàm này) vẫn là nơi CUỐI CÙNG chuyển đổi suspicion -> tag qua threshold cứng
+    (_NAME_CONFIDENCE_SCORE + CATEGORY_THRESHOLDS["trademark_text"]), LLM chỉ tự đánh giá mức
+    độ nghi ngờ định tính (high/medium/low) chứ không tự gán tag BLOCKED/RISKY/SAFE trực tiếp.
+
+    Input: list [{"block_indexes","phrase","suspicion","reasoning"}, ...] — CHỈ chứa mục Agent 2
+    đã chủ động flag (suspicion >= low), KHÔNG cần liệt kê mọi block.
+    """
+    if not text_trademark_flags:
+        return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
+    best = max(text_trademark_flags, key=lambda f: _NAME_CONFIDENCE_SCORE.get(f.get("suspicion", "low"), 45))
+    raw = _NAME_CONFIDENCE_SCORE.get(best.get("suspicion", "low"), 45)
+    result = _score_numeric_category("trademark_text", raw)
+    if result["tag"] != "SAFE":
+        result["detail"] = f"Agent 2 tự nghi ngờ (không cần database): \"{best.get('phrase')}\" — {best.get('reasoning', '')}"
+    return result
 
 
 def _load_reference_names(filename: str) -> set:
@@ -403,6 +431,7 @@ def run_black_box(
     suspected_logos: "list | None" = None,
     agent2_verifications: "list | None" = None,
     face_identifications: "list | None" = None,
+    text_trademark_flags: "list | None" = None,
 ) -> dict:
     """
     Điểm vào duy nhất orchestrator.py cần gọi — gói gọn toàn bộ black box thành 1 hàm.
@@ -429,6 +458,12 @@ def run_black_box(
     (BlazeFace) — nguồn celebrity_likeness THỨ 2, ĐỘC LẬP với suspected_celebrities, KHÔNG
     đối chiếu database (xem score_celebrity_likeness_from_faces()). Gộp với nguồn cũ qua
     _combine_category_results (lấy tín hiệu nặng hơn), None/rỗng -> không đổi hành vi cũ.
+
+    text_trademark_flags: (2026-08-21, MỚI) output Agent 2 TASK 3 (agents.py) — "cảm nhận"
+    trademark/slogan riêng của LLM, KHÔNG đối chiếu database. Nguồn THỨ 2, ĐỘC LẬP cho
+    trademark_text, gộp với score_trademark_text(trademark_flags) (database THẬT, không đổi)
+    qua _combine_category_results — high suspicion CÓ THỂ tự BLOCKED dù không match database
+    nào (quyết định rõ ràng của nhóm, xem score_trademark_text_llm_sense()).
     """
     suspected_characters = _apply_verification_filter(suspected_characters or [], agent2_verifications, "character", "name")
     suspected_celebrities = _apply_verification_filter(suspected_celebrities or [], agent2_verifications, "celebrity", "name")
@@ -449,10 +484,14 @@ def run_black_box(
     # qua Pydantic response_model để tự lọc field lạ).
     content_safety_key = content_safety_result.pop("_category_key", "weapons_violence")
 
+    trademark_score = score_trademark_text(trademark_flags)
+    if text_trademark_flags:
+        trademark_score = _combine_category_results(trademark_score, score_trademark_text_llm_sense(text_trademark_flags))
+
     category_results = {
         "character_similarity": character_score,
         "logo_similarity": logo_score,
-        "trademark_text": score_trademark_text(trademark_flags),
+        "trademark_text": trademark_score,
         content_safety_key: content_safety_result,
     }
     celebrity_score = score_celebrity_likeness(suspected_celebrities) if suspected_celebrities else None
