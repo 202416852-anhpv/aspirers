@@ -78,14 +78,20 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
     trước đây). THUẦN PYTHON, bbox_norm luôn lấy từ dữ liệu THẬT (text_blocks/detected_faces đã
     có toạ độ chính xác) — KHÔNG bao giờ để LLM tự đoán toạ độ.
 
-    3 nguồn gộp chung:
+    2 nguồn gộp chung (⚠️ 2026-08-22: bớt 1 nguồn — xem bên dưới):
     1. trademark_flags (Python match database THẬT, static/live — KHÔNG đổi) — tìm block chứa
        đúng phrase đã match (substring, case-insensitive) để lấy bbox; không tìm được thì bỏ
-       qua (KHÔNG đoán bbox — thà thiếu box còn hơn box sai).
-    2. text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) — dùng thẳng block_indexes Agent
-       2 đã trả về, khớp với text_blocks theo đúng index đã gửi.
-    3. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
+       qua (KHÔNG đoán bbox — thà thiếu box còn hơn box sai). text_blocks giờ LUÔN rỗng (RapidOCR
+       đã rút khỏi flow, xem orchestrator.process_one_design) nên nhánh này hiện KHÔNG sinh box
+       nào — giữ nguyên code (không phải dead code thật, chỉ đang thiếu nguồn bbox) để tự động
+       hoạt động lại nếu sau này bật lại RapidOCR.
+    2. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
        nhận diện được, tránh khoanh vùng những mặt vô hại).
+
+    text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) KHÔNG còn góp bbox ở đây nữa — từ
+    khi TASK 3 chuyển sang dùng OCR_text thô (agents.py::run_agent2_verify_candidates, không còn
+    text_blocks có index/bbox), Agent 2 không còn cách nào trỏ về toạ độ cụ thể. Vẫn ảnh hưởng
+    verdict/reasoning bình thường qua black_box.py, chỉ KHÔNG khoanh được vùng trên ảnh gốc nữa.
     """
     out = []
     for f in trademark_flags or []:
@@ -102,16 +108,6 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
                     "detail": "Trùng khớp database" + (f" (chủ sở hữu: {f.get('owner')})" if f.get("owner") else ""),
                 })
                 break  # 1 block khớp đầu tiên là đủ, tránh box trùng lặp cho cùng 1 phrase
-
-    for flag in text_trademark_flags or []:
-        for idx in flag.get("block_indexes") or []:
-            if isinstance(idx, int) and 0 <= idx < len(text_blocks or []):
-                out.append({
-                    "kind": "text",
-                    "bbox_norm": text_blocks[idx]["bbox_norm"],
-                    "label": flag.get("phrase", ""),
-                    "detail": flag.get("reasoning", ""),
-                })
 
     for face in detected_faces or []:
         if face.get("suspected_name"):
@@ -259,17 +255,20 @@ async def process_one_design(
         face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
 
         # ⚠️ text_blocks VẪN đặt cứng RỖNG — extract_text_blocks (RapidOCR) vẫn tắt (xem ghi
-        # chú phía trên). Agent 2 tự động BỎ QUA TASK 3 (trademark sense-check theo block) vì
-        # text_blocks rỗng (guard sẵn trong agents.py::_build_agent2_prompt), vẫn chạy đủ TASK 1
-        # (verify candidate) + TASK 2 (định danh mặt cắt, nhờ face_crops_result vừa bật lại).
+        # chú phía trên). Chỉ còn dùng để truyền cho _build_flagged_regions() (khoanh vùng bbox
+        # thật cho FE, hiện không sinh box nào vì thiếu nguồn — xem docstring hàm đó), KHÔNG còn
+        # truyền cho Agent 2 nữa.
         text_blocks = []
 
         # Trademark matching (Python, database THẬT) quay lại dùng THẲNG OCR_text của Vision
-        # (Agent 1) — nguồn OCR duy nhất bây giờ, đúng như trước khi có RapidOCR.
+        # (Agent 1) — nguồn OCR duy nhất bây giờ, đúng như trước khi có RapidOCR. Agent 2 TASK 3
+        # (agents.py::run_agent2_verify_candidates, "cảm nhận" riêng của LLM) dùng CHUNG chuỗi
+        # này — KHÔNG còn indexed block nào để truyền, chỉ còn raw text (đủ cho task ngôn ngữ
+        # thuần tuý này, xem ghi chú trong agents.py).
         trademark_source_text = classify["OCR_text"]
 
         agent2_result, logo_match, char_match, trademark_flags, market = await asyncio.gather(
-            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], text_blocks),
+            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], trademark_source_text),
             asyncio.to_thread(cc_opencv.match_logo, local_path, {"suspected_logos": classify["suspected_logos"]}),
             asyncio.to_thread(cc_opencv.match_character, local_path),
             cc_trademark.resolve_trademark_phrases(trademark_source_text, niche),

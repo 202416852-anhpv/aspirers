@@ -95,7 +95,7 @@ def _build_messages(system_prompt: str, user_prompt: str, image_base64: "str | l
     labels: (2026-08-21, optional) nhãn TỰ ĐỊNH NGHĨA cho từng ảnh theo đúng thứ tự trong
     image_base64, dùng khi cần phân biệt NHIỀU LOẠI ảnh khác nhau trong CÙNG 1 message (vd
     Agent 2 gửi ảnh thiết kế gốc + nhiều ảnh mặt đã crop — xem run_agent2_verify_candidates).
-    Không truyền -> giữ NGUYÊN hành vi cũ: nhiều ảnh không nhãn -> tự đánh "Trang N/M", 1 ảnh
+    Không truyền -> giữ NGUYÊN hành vi cũ: nhiều ảnh không nhãn -> tự đánh "Page N/M", 1 ảnh
     -> không nhãn gì (backward compatible 100%).
     """
     images = image_base64 if isinstance(image_base64, list) else ([image_base64] if image_base64 else [])
@@ -111,7 +111,7 @@ def _build_messages(system_prompt: str, user_prompt: str, image_base64: "str | l
         if labels and i < len(labels) and labels[i]:
             content.append({"type": "text", "text": f"--- {labels[i]} ---"})
         elif multi:
-            content.append({"type": "text", "text": f"--- Trang {i + 1}/{len(images)} ---"})
+            content.append({"type": "text", "text": f"--- Page {i + 1}/{len(images)} ---"})
         content.append({"type": "image_url", "image_url": {"url": _to_data_uri(img)}})
     return [
         {"role": "system", "content": system_prompt},
@@ -218,7 +218,7 @@ def _build_agent1_prompt(niche_taxonomy: dict, brand_names: list[str]) -> tuple[
     system_prompt = f"""You are a Senior IP Compliance Vision Analyst for a Print-on-Demand marketplace.
 Analyze the uploaded design image and classify it — you are NOT limited to the reference lists below, always classify freely even for niches/styles outside them.
 
-📌 If MULTIPLE images are provided (marked "--- Trang N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission — analyze ALL pages together and consolidate everything (OCR_text, motifs, suspected_logos) into ONE JSON response covering the whole document, do NOT answer per page.
+📌 If MULTIPLE images are provided (marked "--- Page N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission — analyze ALL pages together and consolidate everything (OCR_text, motifs, suspected_logos) into ONE JSON response covering the whole document, do NOT answer per page.
 
 📌 REFERENCE NICHE LIST (not exhaustive, use if it fits, otherwise propose your own): {niches_text}
 📌 REFERENCE STYLE LIST (not exhaustive): {styles_text}
@@ -304,7 +304,7 @@ def run_agent1_classify(image_base64: "str | list[str]", niche_taxonomy: "dict |
 # mục — mục đích giảm false positive từ việc Agent 1 đoán rộng tay (top 5 luôn liệt kê kể cả
 # không chắc). Đây KHÔNG phải 1 lượt detect mới — prompt cấm tự thêm mục ngoài danh sách.
 
-def _build_agent2_prompt(candidates: dict, num_face_crops: int, text_blocks: "list[dict] | None" = None) -> tuple[str, str]:
+def _build_agent2_prompt(candidates: dict, num_face_crops: int, ocr_text: "str | None" = None) -> tuple[str, str]:
     lines = []
     for item in candidates.get("logos", []) or []:
         name = str(item.get("brand_name", "")).strip()
@@ -342,7 +342,7 @@ For each candidate, decide:
 - "reasoning": one short sentence.
 
 Echo the "name" and "category" fields EXACTLY as given above (do not rephrase/translate them)."""
-        verify_shape = '"verifications": [{"category": "logo", "name": "nike", "present": true, "reasoning": "The swoosh logo is clearly visible on the chest."}]'
+        verify_shape = '"verifications": [{"category": "logo", "name": "nike", "present": true, "reasoning": "Logo dấu swoosh hiện rõ ở phần ngực áo."}]'
 
     face_task = ""
     face_shape = ""
@@ -366,50 +366,61 @@ For each face crop, output:
 - "confidence": "high"/"medium"/"low" — how sure you are of the identification itself (only
   meaningful when suspected_name is not null)
 - "reasoning": one short sentence"""
-        face_shape = '"face_identifications": [{"face_index": 0, "suspected_name": "Cristiano Ronaldo", "confidence": "medium", "reasoning": "Strong facial resemblance, well-known athlete."}]'
+        face_shape = '"face_identifications": [{"face_index": 0, "suspected_name": "Cristiano Ronaldo", "confidence": "medium", "reasoning": "Gương mặt giống rõ, là vận động viên nổi tiếng."}]'
 
     text_task = ""
     text_shape = ""
-    if text_blocks:
-        blocks_text = "\n".join(f'{i}: "{b.get("text", "")}"' for i, b in enumerate(text_blocks))
+    if ocr_text and ocr_text.strip():
         text_task = f"""
 
-TASK 3 — TRADEMARK / SLOGAN SENSE-CHECK (TEXT ONLY, no image needed for this task): below is a
-list of TEXT BLOCKS extracted by an OCR engine from the design. OCR grouping is geometric and
-imperfect — a single slogan may have been split across multiple blocks, or blocks may contain
-OCR noise/misreads.
+TASK 3 — TRADEMARK / SLOGAN SENSE-CHECK (TEXT ONLY, no image needed for this task): below is the
+OCR text transcribed from the design by Agent 1 (may contain transcription noise/misreads).
 
-1. Read through ALL blocks together. If fragments across DIFFERENT blocks look like they form
-   one phrase/slogan when joined, mentally reconstruct it yourself.
+1. Read through the full text below.
 2. Using your OWN knowledge (you are NOT limited to any fixed database — a separate deterministic
-   database check already runs independently in Python, this is purely YOUR judgment as a second,
-   independent opinion), judge whether any reconstructed phrase is a well-known trademarked
-   slogan, brand name, or copyrighted phrase that would cause real IP risk if sold on a
-   Print-on-Demand product.
+   database check already runs independently in Python against a static/live trademark database;
+   this is purely YOUR judgment as a second, independent opinion, and it runs BEFORE that database
+   check's result is known — you cannot see whether the database will find a match or not), judge
+   whether any phrase in it is a well-known trademarked slogan, brand name, or copyrighted phrase
+   that would cause real IP risk if sold on a Print-on-Demand product.
 3. Flag anything you are genuinely suspicious of — including a phrase that closely imitates/
    references a famous brand even if you can't pin the exact source. Skip clearly generic/safe
-   text (plain product descriptions, random words) — do NOT enumerate every block, only flagged ones.
+   text (plain product descriptions, random words) — only flag what's genuinely suspicious.
 
-📌 TEXT BLOCKS (block_index: text):
-{blocks_text}
+🚨 IMPORTANT: even if this phrase turns out to have NO match in our trademark database, your
+"high" suspicion ALONE is enough to get this design BLOCKED downstream (a deliberate policy of
+this system — an obvious real-world trademark should not slip through just because our database
+doesn't happen to list it). Precisely BECAUSE this may be your judgment alone with no database
+confirmation, for ANY item you flag as "high", your "reasoning" MUST: (a) clearly state WHICH
+real brand/slogan/work you believe this matches or closely resembles and WHY, and (b) explicitly
+recommend a quick manual double-check (e.g. against USPTO/EUIPO or a web search) before treating
+it as fully certain, since it is an AI judgment call rather than a confirmed database hit.
+
+📌 OCR TEXT:
+\"\"\"
+{ocr_text.strip()}
+\"\"\"
 
 For each flagged item, output:
-- "block_indexes": list of the block_index value(s) involved (usually just one; multiple only
-  if you joined fragments across blocks)
-- "phrase": the reconstructed phrase/text you are flagging (your best reconstruction, not
-  necessarily verbatim from one block)
+- "phrase": the exact phrase/text you are flagging (verbatim from the OCR text above where possible)
 - "suspicion": "high"/"medium"/"low" — "high" means you are quite confident this is a real,
   recognizable trademarked phrase/slogan (this will be treated as seriously as a real database
   match, even with zero database evidence — so only use "high" when you are genuinely sure)
-- "reasoning": one short sentence"""
-        text_shape = '"text_trademark_flags": [{"block_indexes": [0], "phrase": "Just Do It", "suspicion": "high", "reasoning": "Iconic Nike slogan, globally recognizable."}]'
+- "reasoning": your justification — for "high", follow the (a)/(b) rule above"""
+        text_shape = '"text_trademark_flags": [{"phrase": "Just Do It", "suspicion": "high", "reasoning": "Trùng khớp nguyên văn slogan nổi tiếng toàn cầu của Nike. Chưa có kết quả khớp trong database — nên kiểm chứng nhanh thủ công qua USPTO/EUIPO trước khi kết luận chắc chắn."}]'
 
     all_shapes = ",\n  ".join(s for s in (verify_shape, face_shape, text_shape) if s)
 
     system_prompt = f"""You are a Verification Specialist for a Print-on-Demand IP compliance system.
 {verify_task}{face_task}{text_task}
 
-📌 If multiple design images are provided (marked "--- Trang N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission covering all pages.
+📌 If multiple design images are provided (marked "--- Page N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission covering all pages.
+
+🌐 OUTPUT LANGUAGE: write every "reasoning" value in professional, standard commercial Vietnamese
+(tiếng Việt chuẩn thương mại — clear, formal business tone, no slang, no literal word-for-word
+translation-ese). Do NOT translate: "name"/"category" (echo exactly as given), "suspected_name"
+(a real person's name, proper noun), "confidence"/"suspicion" (fixed enum values), or "phrase"
+(quote it verbatim in whatever language it appears in the design — do not translate the quote itself).
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, no text outside it, exact keys only.
 
@@ -425,7 +436,7 @@ def run_agent2_verify_candidates(
     image_base64: "str | list[str]",
     candidates: dict,
     face_crops: "list[dict] | None" = None,
-    text_blocks: "list[dict] | None" = None,
+    ocr_text: "str | None" = None,
 ) -> dict:
     """
     candidates: {"logos": [{"brand_name","confidence"}], "characters": [{"name","confidence"}],
@@ -437,24 +448,25 @@ def run_agent2_verify_candidates(
     KHÔNG định danh — ảnh crop được gửi thẳng cho Agent 2 (Claude Vision) tự nhận diện trực
     tiếp, KHÔNG đối chiếu database (quyết định của nhóm, xem docs.md).
 
-    text_blocks: (2026-08-21, MỚI) output opencv_modules.extract_text_blocks()["text_blocks"] —
-    [{"bbox_norm","text","ocr_confidence"}, ...]. CHỈ gửi TEXT (không gửi ảnh crop cho task
-    này) — quyết định có chủ đích để tối ưu tốc độ/chi phí: đánh giá "đây có phải trademark/
-    slogan nổi tiếng không" là bài toán NGÔN NGỮ thuần tuý, không cần nhìn ảnh (khác face
-    identification — việc đó THẬT SỰ cần nhìn). Agent 2 tự ghép các block rời rạc thành câu
-    + vừa so khớp cảm nhận riêng, vừa để Python (trademark_resolver.py, không đổi) so khớp
-    database độc lập — 2 nguồn gộp qua black_box.py::_combine_category_results.
+    ocr_text: (2026-08-22, ĐỔI từ text_blocks) TRƯỚC dùng opencv_modules.extract_text_blocks()
+    (RapidOCR, indexed blocks + bbox thật) cho task này — RapidOCR đã bị RÚT khỏi flow thật (nghi
+    OOM crash trên Render, xem orchestrator.py). Giờ dùng THẲNG classify["OCR_text"] (Vision tự
+    OCR, 1 chuỗi text thô, không có bbox) — vẫn đủ cho task này vì đánh giá "đây có phải
+    trademark/slogan nổi tiếng không" là bài toán NGÔN NGỮ thuần tuý, không cần bbox/không cần
+    nhìn lại ảnh. Cái mất: text_trademark_flags giờ KHÔNG còn bbox để khoanh vùng trên ảnh gốc
+    (_build_flagged_regions ở orchestrator.py), chỉ còn ảnh hưởng verdict/reasoning — chấp nhận
+    được, đổi lấy việc bỏ hẳn model ONNX ra khỏi request path.
 
-    Không có candidate/face_crop/text_block NÀO -> khỏi tốn 1 lần gọi LLM, trả rỗng luôn.
+    Không có candidate/face_crop/ocr_text NÀO -> khỏi tốn 1 lần gọi LLM, trả rỗng luôn.
     """
     candidates = candidates or {}
     face_crops = face_crops or []
-    text_blocks = text_blocks or []
+    ocr_text = ocr_text or ""
     has_candidates = any(candidates.get(k) for k in ("logos", "characters", "celebrities"))
-    if not has_candidates and not face_crops and not text_blocks:
+    if not has_candidates and not face_crops and not ocr_text.strip():
         return {"verifications": [], "face_identifications": [], "text_trademark_flags": []}
 
-    system_prompt, user_prompt = _build_agent2_prompt(candidates, len(face_crops), text_blocks)
+    system_prompt, user_prompt = _build_agent2_prompt(candidates, len(face_crops), ocr_text)
 
     # Ảnh thiết kế gốc (1 hoặc nhiều trang) đi TRƯỚC, ảnh mặt crop đi SAU — nhãn riêng cho từng
     # loại để Agent 2 không nhầm "trang thiết kế" với "ảnh mặt cắt" (xem _build_messages labels).
@@ -518,10 +530,11 @@ def run_agent2_verify_candidates(
         suspicion = item.get("suspicion")
         if not phrase or suspicion not in ("low", "medium", "high"):
             continue
-        raw_indexes = item.get("block_indexes")
-        indexes = [int(i) for i in raw_indexes if isinstance(i, (int, float))] if isinstance(raw_indexes, list) else []
         clean_text_flags.append({
-            "block_indexes": indexes,
+            # "block_indexes" giữ rỗng cố định — không còn nguồn bbox (RapidOCR đã rút khỏi
+            # flow, xem ghi chú run_agent2_verify_candidates ở trên). Giữ key để khớp shape
+            # schemas.TextTrademarkFlag (default_factory=list), KHÔNG xoá field khỏi contract.
+            "block_indexes": [],
             "phrase": phrase,
             "suspicion": suspicion,
             "reasoning": str(item.get("reasoning", "")),
@@ -539,9 +552,10 @@ def _build_group_c_prompt(evidence_bundle: dict, pdf_text_blocks: "list | None")
         "This design comes from a digital-native PDF — real pixel bounding boxes are provided "
         "below for text elements; use them directly instead of estimating a grid position for text."
         if pdf_text_blocks else
-        "Use a 3x3 grid description (top-left/top-center/top-right/center-left/center/center-right/"
-        "bottom-left/bottom-center/bottom-right) to describe WHERE each issue appears — do NOT "
-        "attempt precise pixel coordinates, vision models are not reliable at that."
+        "Describe WHERE each issue appears using a 3x3 grid, written in Vietnamese (e.g. "
+        "\"góc trên-trái\"/\"trên-giữa\"/\"góc trên-phải\"/\"giữa-trái\"/\"chính giữa\"/\"giữa-phải\"/"
+        "\"góc dưới-trái\"/\"dưới-giữa\"/\"góc dưới-phải\") — do NOT attempt precise pixel "
+        "coordinates, vision models are not reliable at that."
     )
     bbox_data = json.dumps(pdf_text_blocks, ensure_ascii=False) if pdf_text_blocks else "(not available — use grid description)"
 
@@ -556,18 +570,23 @@ independent detectors and must produce a neutral positioning summary — NOT a f
 📌 PDF TEXT BLOCKS WITH REAL BBOX (if available): {bbox_data}
 
 🚨 CITATION RULE (mandatory):
-- OK: cite as "matched against pre-compiled reference database (last updated {{date}})".
+- OK: cite as "đối chiếu với cơ sở dữ liệu tham chiếu đã biên soạn sẵn (cập nhật lần cuối {{date}})".
 - OK to cite a specific registration number ONLY if it is present in the evidence bundle above (i.e. came from a real lookup).
 - NEVER invent/hallucinate a registration or case number that is not in the evidence bundle.
 
 TASK: for each non-empty evidence item, write one positioning_note: {{"category", "location_description", "citation"}}. Then write a short neutral "summary".
 
+🌐 OUTPUT LANGUAGE: write "location_description", "citation", and "summary" in professional,
+standard commercial Vietnamese (tiếng Việt chuẩn thương mại — clear, formal business tone). Keep
+"category" EXACTLY as it appears as a key in the evidence bundle above (English, e.g.
+"logo_similarity") — do NOT translate it, downstream Python code matches on this exact string.
+
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only.
 
 REQUIRED JSON SHAPE:
 {{
-  "positioning_notes": [{{"category": "logo_similarity", "location_description": "top-center", "citation": "matched against pre-compiled reference database"}}],
-  "summary": "short neutral summary of all evidence found"
+  "positioning_notes": [{{"category": "logo_similarity", "location_description": "góc trên-giữa thiết kế", "citation": "đối chiếu với cơ sở dữ liệu tham chiếu đã biên soạn sẵn"}}],
+  "summary": "tóm tắt trung lập, ngắn gọn về toàn bộ bằng chứng phát hiện được"
 }}"""
     user_prompt = "Synthesize the evidence bundle above per the instructions."
     return system_prompt, user_prompt
@@ -600,14 +619,19 @@ violation found (not just one).
 
 TASK:
 1. `reasoning`: a clear paragraph explaining WHY this verdict was reached, referencing the evidence above.
-2. `fix_suggestions`: if evidence is non-empty, one entry PER violation category, each with a concrete, actionable fix (e.g. "Replace the Nike logo with a custom-designed icon"). If evidence is empty (fully SAFE), return an empty list.
+2. `fix_suggestions`: if evidence is non-empty, one entry PER violation category, each with a concrete, actionable fix (e.g. "Thay logo Nike bằng icon tự thiết kế riêng"). If evidence is empty (fully SAFE), return an empty list.
+
+🌐 OUTPUT LANGUAGE: write "reasoning" and every "suggestion" in professional, standard commercial
+Vietnamese (tiếng Việt chuẩn thương mại — clear, formal business tone, no slang). Keep "violation"
+EXACTLY as the category key it corresponds to in the evidence above (English, e.g.
+"logo_similarity") — do NOT translate it, downstream code/UI matches on this exact string.
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only.
 
 REQUIRED JSON SHAPE:
 {{
-  "reasoning": "explanation text",
-  "fix_suggestions": [{{"violation": "logo_similarity", "suggestion": "concrete actionable fix"}}]
+  "reasoning": "đoạn giải thích lý do ra verdict, viết bằng tiếng Việt",
+  "fix_suggestions": [{{"violation": "logo_similarity", "suggestion": "cách sửa cụ thể, làm được ngay, viết bằng tiếng Việt"}}]
 }}"""
     user_prompt = "Write the reasoning and fix suggestions based on the design image and the verdict/evidence above."
     return system_prompt, user_prompt
@@ -652,30 +676,54 @@ def run_agent4_market_suggestion(niche: str, style: str, target_country: str = "
     platform_clean = (platform or "").lower().strip()
     platforms = ["etsy", "amazon", "tiktok", "shopify"]
     policy_blocks = "\n\n".join(
-        f"[{p.upper()}]\n{load_compliance_policy_context(p, country_clean) or '(chưa có data policy cho thị trường này)'}"
+        f"[{p.upper()}]\n{load_compliance_policy_context(p, country_clean) or '(no local policy snapshot on file for this market yet)'}"
         for p in platforms
     )
-    trend_block = load_trend_context(country_clean) or "(chưa có data trend cho thị trường này)"
+    trend_block = load_trend_context(country_clean) or "(no local trend snapshot on file for this market yet)"
+
+    # (2026-08-22) Tiêu chí phân biệt 4 platform — thêm vào để chống thiên hướng LLM cứ mặc
+    # định gợi ý Etsy (bias huấn luyện phổ biến: "POD" ~ "Etsy" trong dữ liệu training, bất kể
+    # niche thật sự phù hợp platform nào hơn). Cho model 1 bộ tiêu chí CỤ THỂ để tự so sánh thay
+    # vì chỉ đoán theo pattern quen thuộc — xem PLATFORM_FIT_CRITERIA + câu cấm mặc định bên dưới.
+    platform_fit_criteria = """
+📌 PLATFORM FIT CRITERIA (use these to reason, do NOT just default to the platform most stereotypically associated with "print-on-demand"):
+- ETSY: best for handmade-look, vintage/retro, niche-hobby, whimsical/artistic designs aimed at gift-buyers seeking something unique. Lower volume, higher price tolerance, curated/aesthetic-driven discovery.
+- AMAZON MERCH ON DEMAND: best for broad mass-market, evergreen keyword-driven designs (profession/hobby/holiday sayings) that buyers find via search rather than browsing. Highest volume potential, but the strictest and most aggressive automated IP/trademark enforcement of the four.
+- TIKTOK SHOP: best for trend-driven, meme/pop-culture-adjacent, youth-skewing designs riding a short, fast-moving trend cycle. Highest reach for viral content, but also highest risk of unlicensed meme/character IP.
+- SHOPIFY: best when the seller wants to build their OWN brand/store rather than rely on marketplace discovery — requires the seller to drive their own traffic (ads/social/influencers). Best fit for niches with strong repeat-purchase or brand-building potential, not a one-off marketplace impulse buy.
+Weigh the ACTUAL niche/style described below against these four profiles and pick whichever is the genuinely strongest fit — do not default to Etsy just because it is the platform most commonly discussed for POD sellers in general.
+"""
+
+    country_reasoning_note = """
+📌 COUNTRY REASONING: the policy/trend snapshots injected above are only the ones we currently have
+on file for the requested country — that is a data-coverage limitation, NOT evidence that other
+countries are worse markets. When recommending `top_country_suggestion`, feel free to name a
+different country than the one requested if it is genuinely a stronger commercial fit, drawing on
+your own general e-commerce/market knowledge for that reasoning. Just be transparent in `rationale`
+about which parts are grounded in the injected policy/trend snapshot above (only available for the
+requested country right now) versus your own general knowledge of other markets — do not imply a
+country has verified local policy data when it does not.
+"""
 
     selected_combo_header = ""
     selected_combo_task = ""
     selected_combo_json = ""
     if platform_clean:
         selected_combo_header = (
-            f'\n📌 USER ĐÃ TỰ CHỌN SẴN (không phải gợi ý của bạn): platform="{platform_clean}", '
+            f'\n📌 USER HAS ALREADY CHOSEN (this is NOT your recommendation to make): platform="{platform_clean}", '
             f'country="{country_clean.upper()}"\n'
         )
         selected_combo_task = f"""
-3. `selected_platform_suitable` (true/false): THẨM ĐỊNH RIÊNG platform+country user ĐÃ CHỌN
-   ("{platform_clean}" tại "{country_clean.upper()}") — combo NÀY có phù hợp/an toàn để đăng
-   design này không, dựa trên IP-compliance risk của CHÍNH platform đó (KHÔNG phải platform bạn
-   gợi ý ở mục 1 — 2 câu trả lời có thể khác nhau, ví dụ user chọn Amazon nhưng bạn gợi ý Etsy
-   tốt hơn, vẫn phải trả lời trung thực Amazon có ổn hay không, không né tránh).
-4. `selected_platform_rationale`: giải thích ngắn cho câu trả lời #3, trích dẫn đúng policy của
-   CHÍNH platform "{platform_clean}" ở trên (nếu policy đó bị đánh dấu thiếu data, nói thật)."""
+3. `selected_platform_suitable` (true/false): SEPARATELY assess the platform+country the user
+   ALREADY CHOSE ("{platform_clean}" in "{country_clean.upper()}") — is THIS specific combo
+   suitable/safe to list this design on, based on that platform's own IP-compliance risk (NOT the
+   platform you recommended in item 1 — the two answers can differ, e.g. the user picked Amazon but
+   you recommended Etsy as better; still answer honestly whether Amazon itself is fine, don't dodge).
+4. `selected_platform_rationale`: short rationale for item 3, citing the policy of the user's
+   ACTUAL chosen platform "{platform_clean}" above (if that policy is marked as missing data, say so honestly)."""
         selected_combo_json = (
             ', "selected_platform_suitable": true, '
-            '"selected_platform_rationale": "short rationale for the user\'s ACTUAL selected platform/country, citing its own policy"'
+            '"selected_platform_rationale": "lý do ngắn gọn cho platform/country user ĐÃ CHỌN, viết bằng tiếng Việt, trích dẫn đúng policy của platform đó"'
         )
 
     system_prompt = f"""You are a Market/Platform Advisor for Print-on-Demand sellers, specializing in
@@ -687,22 +735,26 @@ IP compliance risk per platform.
 {policy_blocks}
 📌 MARKET TREND CONTEXT (for {country_clean.upper()}):
 {trend_block}
-
+{platform_fit_criteria}{country_reasoning_note}
 TASK:
 1. `top_country_suggestion`/`top_platform_suggestion`: your OWN independent recommendation of the
    single best country+platform to launch this niche/style on (commercial fit + IP-compliance
    risk) — this does NOT need to match what the user already selected, if any.
 2. `rationale`: short rationale for #1.{selected_combo_task}
 
-If policy/trend context above is marked "(chưa có data...)" (missing), say so honestly instead
-of inventing details.
+If policy/trend context above is marked as missing, say so honestly instead of inventing details.
+
+🌐 OUTPUT LANGUAGE: write "rationale" and "selected_platform_rationale" in professional, standard
+commercial Vietnamese (tiếng Việt chuẩn thương mại — clear, formal business tone, no slang). Keep
+"top_country_suggestion" as a plain 2-letter ISO country code and "top_platform_suggestion" as the
+platform's identifier (etsy/amazon/tiktok/shopify) — do NOT translate either of those two.
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only. Base your
 answer on the ACTUAL context above — do NOT copy the example values below verbatim, they are
 placeholders only.
 
 REQUIRED JSON SHAPE (keys only, fill in real values from the context above):
-{{"top_country_suggestion": "<2-letter country code>", "top_platform_suggestion": "<platform name>", "rationale": "short rationale citing the policy/trend context above, or noting missing data"{selected_combo_json}}}"""
+{{"top_country_suggestion": "<2-letter country code>", "top_platform_suggestion": "<platform name>", "rationale": "lý do ngắn gọn, viết bằng tiếng Việt, có trích dẫn policy/trend context ở trên, hoặc nêu rõ nếu thiếu data"{selected_combo_json}}}"""
     user_prompt = f"Recommend the best country/platform for a '{niche}' niche, '{style}' style design targeting {country_clean.upper()}."
     raw = _call_llm_json(system_prompt, user_prompt, temperature=0.4)
     result = {

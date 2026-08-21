@@ -1,11 +1,11 @@
 [Shopify — US Market — Intellectual Property Policy Summary]
 
-Source: help.shopify.com/en/manual/compliance/intellectual-property, shopify.com/legal/tools/report-an-issue/trademark-infringement — tổng hợp công khai, last_updated: 2026-08-20.
+Source: help.shopify.com/en/manual/compliance/intellectual-property, shopify.com/legal/tools/report-an-issue/trademark-infringement — compiled from public content, last_updated: 2026-08-20.
 
-- Shopify tuân thủ DMCA cho khiếu nại BẢN QUYỀN (copyright) — có quy trình riêng, tách biệt, cho khiếu nại TRADEMARK (DMCA không bao phủ trademark, đây là điểm khác biệt pháp lý quan trọng cần đúng khi agent giải thích cho user).
-- Khi nhận report hợp lệ: Shopify gỡ nội dung vi phạm khỏi store, thông báo cho merchant qua Shopify admin.
-- Khác biệt lớn nhất so với Etsy/Amazon/TikTok: Shopify là nền tảng "cấp hạ tầng" (mỗi store là website riêng của seller), không phải marketplace tập trung — nên kiểm duyệt CHỦ ĐỘNG (proactive scanning) của Shopify YẾU HƠN các sàn marketplace tập trung, phần lớn dựa vào report từ bên thứ 3 (reactive), không tự động quét toàn bộ store.
-- Vi phạm lặp lại (repeat infringer) có thể bị hạn chế store hoặc chấm dứt hợp đồng (terminate).
-- Nộp report sai/có ác ý (false or bad-faith IP claim) có thể bị kiện ngược lại — Shopify có cơ chế bảo vệ merchant khỏi report gian lận.
+- Shopify follows the DMCA for COPYRIGHT claims — it has a separate, distinct process for TRADEMARK claims (DMCA does not cover trademark; this is an important legal distinction the agent must get right when explaining it to the user).
+- When a valid report is received: Shopify removes the infringing content from the store and notifies the merchant via the Shopify admin.
+- The biggest difference from Etsy/Amazon/TikTok: Shopify is an "infrastructure-layer" platform (each store is the seller's own website), not a centralized marketplace — so Shopify's PROACTIVE scanning is WEAKER than centralized marketplaces, relying mostly on third-party reports (reactive) rather than automatically scanning every store.
+- Repeat infringers can have their store restricted or their contract terminated.
+- Filing a false or bad-faith IP claim can be counter-sued — Shopify has protections in place for merchants against fraudulent reports.
 
-Gợi ý cho Agent 4: Shopify có rủi ro bị PHÁT HIỆN chủ động THẤP HƠN các sàn marketplace (do kiểm duyệt reactive, không proactive) — nhưng đây KHÔNG đồng nghĩa an toàn hơn về mặt pháp lý, chỉ là xác suất bị bắt sớm thấp hơn. Agent 4 KHÔNG được diễn giải điều này thành "khuyến khích vi phạm trên Shopify vì ít bị kiểm duyệt" — chỉ nêu sự khác biệt cơ chế, verdict compliance vẫn phải dựa trên rủi ro pháp lý thực, không phải xác suất bị phát hiện.
+Guidance for Agent 4: Shopify has a LOWER risk of proactive DETECTION than centralized marketplaces (because moderation is reactive, not proactive) — but this does NOT mean it is legally safer, only that the odds of getting caught early are lower. Agent 4 must NOT reframe this as "infringement is encouraged on Shopify because moderation is lighter" — only note the mechanism difference; the compliance verdict must still be based on actual legal risk, not detection probability.

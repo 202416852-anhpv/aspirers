@@ -389,3 +389,68 @@ production khác.
 - `main.py`: `from compliance_checker.api.routes import router as compliance_router` (thay 3 import cũ + 4 hàm route).
 - `engine/agents.py` (config.py/knowledge_loader.py): KHÔNG đổi — 2 import này resolve qua
   `sys.path` (chạy từ `backend/`), không phụ thuộc `agents.py` nằm sâu bao nhiêu cấp.
+
+## 10. Prompt tiếng Anh + output tiếng Việt + Agent 2 TASK 3 dùng OCR thô + Agent 4 giảm thiên hướng Etsy (2026-08-22)
+
+**Prompt (system_prompt/user_prompt gửi LLM) toàn bộ chuyển sang tiếng Anh** — trước đây Agent 4
+là agent DUY NHẤT có phần Vietnamese lẫn trong prompt (`selected_combo_header`/`selected_combo_task`),
+cộng với marker "--- Trang N/M ---" (đánh dấu trang PDF nhiều trang, `_build_messages()`) — cả 2 đã
+đổi sang tiếng Anh. Agent 1/2/3/Nhóm C vốn đã 100% tiếng Anh từ trước, không cần đổi thân prompt.
+
+⚠️ Phát hiện thêm khi rà: **nội dung 5 file `data/policies/*.md` + `data/trends/us_trends.md` —
+được TIÊM THẲNG vào system_prompt của Agent 4 — hoàn toàn bằng tiếng Việt** (phần lớn dung lượng
+prompt thật sự, nhiều hơn hẳn phần code tự viết). Đã dịch cả 5 file sang tiếng Anh, giữ nguyên
+100% nội dung/số liệu/nguồn (`source`/`last_updated` không đổi) — chỉ dịch câu chữ.
+
+**Output (giá trị trong JSON model trả về) giờ enforce tiếng Việt chuẩn thương mại** — thêm khối
+`🌐 OUTPUT LANGUAGE` vào OUTPUT RULES của Agent 2/Nhóm C/Agent 3/Agent 4, liệt kê RÕ field nào phải
+tiếng Việt (mọi field prose tự do: `reasoning`, `location_description`, `citation`, `summary`,
+`suggestion`, `rationale`) và field nào PHẢI giữ nguyên (enum cố định `"low"/"medium"/"high"`,
+`category`/`violation` — khớp key evidence bundle Python dùng để tra cứu, `top_platform_suggestion`/
+`top_country_suggestion` — identifier/mã nước, tên riêng brand/character/celebrity, và `phrase` —
+trích dẫn nguyên văn từ OCR_text, KHÔNG dịch nội dung đang trích dẫn). Agent 1 không cần đổi —
+không có field prose tự do nào (niche/style/motifs là slug, OCR_text bắt buộc verbatim theo đúng
+ngôn ngữ gốc trên thiết kế).
+
+**Agent 2 TASK 3 (trademark/slogan sense-check) đổi nguồn input**: trước dùng
+`opencv_modules.extract_text_blocks()` (RapidOCR, indexed blocks + bbox thật) — RapidOCR đã bị RÚT
+khỏi flow thật (nghi OOM crash trên Render, xem mục "Điều chưa làm"/lịch sử session). Giờ dùng
+THẲNG `classify["OCR_text"]` (Agent 1 tự OCR bằng Vision, 1 chuỗi thô, không bbox) — đủ cho task
+NGÔN NGỮ thuần tuý này. Mất bbox → `_build_flagged_regions()` không còn khoanh vùng được cho
+flag loại này trên ảnh gốc (vẫn ảnh hưởng verdict/reasoning bình thường qua black_box.py).
+
+Xác nhận lại + siết chặt yêu cầu **"nghi ngờ cao dù không có trong database vẫn BLOCKED"** (đã có
+từ trước, KHÔNG đổi logic `black_box.py::score_trademark_text_llm_sense`) — bổ sung PROMPT bắt
+buộc: khi `suspicion="high"`, `reasoning` PHẢI (a) nêu rõ nghi là thương hiệu/tác phẩm nào và vì
+sao, (b) khuyến nghị kiểm chứng thủ công nhanh (USPTO/EUIPO/tìm kiếm web) — vì đây là phán đoán
+AI, KHÔNG phải kết quả database đã xác minh. Verify THẬT (API key thật, không mock):
+```
+input:  OCR_text = "JUST DO IT - Best Coffee Mug Ever - Grade A Ceramic", KHÔNG có candidate nào
+output: {"phrase": "JUST DO IT", "suspicion": "high",
+         "reasoning": "Đây là slogan nổi tiếng toàn cầu của thương hiệu Nike... Mặc dù chưa có kết
+                        quả khớp từ database tự động, mức độ nhận diện cao của slogan này đòi hỏi
+                        phải kiểm chứng nhanh thủ công qua USPTO, EUIPO hoặc tìm kiếm web..."}
+→ black_box.score_trademark_text_llm_sense(...) → tag = "BLOCKED"  ✅ đúng như thiết kế
+```
+
+**Agent 4 — giảm thiên hướng gợi ý Etsy + tối ưu reasoning cho quốc gia thiếu data**: thêm khối
+`PLATFORM FIT CRITERIA` (tiêu chí phân biệt cụ thể 4 platform theo hành vi mua hàng thật — Etsy:
+personalized/gift/curated; Amazon: mass-market/keyword-search; TikTok: trend/meme/video; Shopify:
+tự xây brand) để LLM SO SÁNH thay vì pattern-match "POD = Etsy" theo bias huấn luyện, cấm rõ
+"không mặc định Etsy chỉ vì đó là platform hay được nhắc tới nhất cho POD". Thêm khối `COUNTRY
+REASONING`: việc chỉ có policy/trend snapshot cho US KHÔNG có nghĩa nước khác kém hơn — cho phép
+LLM gợi ý quốc gia khác dựa trên kiến thức chung, nhưng phải MINH BẠCH phần nào dựa trên data thật
+đã tiêm vs phần nào là kiến thức chung (không được ngụ ý có data local đã verify khi không có).
+
+Verify THẬT (3 lượt gọi, cùng ngữ cảnh), so sánh niche cố ý khác nhau:
+| Input | top_platform_suggestion | Ghi chú |
+|---|---|---|
+| `nurse_medical` + `typography_quote`, US | `etsy` | Đúng — niche personalization/gift cao, lý do trích đúng tiêu chí đã tiêm |
+| `gym_fitness` + `typography_quote`, US | **`amazon`** | Đổi hẳn khỏi Etsy — niche mass-market/keyword-search điển hình, reasoning trích "khả năng khám phá qua tìm kiếm từ khóa" đúng tiêu chí Amazon |
+| `gaming_esports` + `retro_90s`, target=JP, platform đã chọn=`tiktok` | `etsy` (US) | `selected_platform_suitable: false` cho TikTok+JP kèm lý do riêng — đúng cơ chế thẩm định độc lập; `rationale` tự nêu rõ "không có policy snapshot cho JP" (minh bạch, không giả vờ có data) |
+
+Kết luận: bias không biến mất hoàn toàn (LLM vẫn có thể chọn Etsy cho case biên — gaming/retro có
+thể lập luận theo hướng "vintage collectible" hợp lý), nhưng đã CÓ so sánh thật dựa trên tiêu chí
+cụ thể thay vì mặc định — case mass-market rõ ràng (gym_fitness) đã đổi đúng hướng sang Amazon.
+Threshold này là điểm khởi đầu, nên tiếp tục theo dõi tỉ lệ thật khi có nhiều test case đa dạng hơn
+(đúng tinh thần CLAUDE.md mục 9.1 — số khởi điểm, cần tune lại bằng dữ liệu thật).
