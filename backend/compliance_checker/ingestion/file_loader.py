@@ -5,7 +5,9 @@ của mọi loại input (upload/link/CSV batch đều đi qua đây sau khi đ�
 cục bộ) — phần còn lại của hệ thống chỉ làm việc với 1 ảnh PIL + base64, không cần biết
 định dạng gốc là gì.
 
-Bắt buộc: PNG/JPG. Bonus: PDF/PSD. Deprioritize: AI/EPS/SVG (ROI thấp, xem CLAUDE.md mục 1.2).
+Bắt buộc: PNG/JPG. Bonus: PDF/PSD/AI (2026-08-22, xem ghi chú ở nhánh ".ai" bên dưới).
+Deprioritize: EPS/SVG (ROI thấp, xem CLAUDE.md mục 1.2 — AI đã ra khỏi nhóm này, KHÔNG còn
+deprioritize nữa vì hoá ra tái dùng được gần như nguyên vẹn pipeline PDF sẵn có, chi phí thấp).
 
 pip install pillow pymupdf psd-tools
 """
@@ -54,10 +56,20 @@ class DesignFileLoader:
             except Exception as e:
                 raise DesignFileLoaderError(f"Không đọc được ảnh {file_path}: {e}")
 
-        if ext == ".pdf":
+        if ext in (".pdf", ".ai"):
+            # (2026-08-22) .ai (Adobe Illustrator) TÁI DÙNG NGUYÊN VẸN nhánh PDF — KHÔNG code
+            # thêm parser riêng: mọi file .ai hiện đại (Illustrator 9/CS trở lên, tức hầu hết
+            # file .ai thực tế gặp trong POD ngày nay) LUÔN nhúng kèm 1 bản PDF tương thích bên
+            # trong theo mặc định của Illustrator — PyMuPDF (fitz, đã là dependency sẵn có cho
+            # PDF) mở được thẳng file .ai y hệt PDF thật, không cần biết đó là .ai hay .pdf.
+            # File .ai CỰC CŨ (tiền-PDF-compatibility, trước Illustrator 9 ~ năm 2001, hiếm gặp
+            # trong thực tế) sẽ khiến fitz.open() lỗi — PDFProcessor.process() đã tự bắt mọi lỗi
+            # (try/except, trả {"error": ...}, KHÔNG BAO GIỜ raise thẳng ra ngoài — xem
+            # pdf_processor.py) nên case này chỉ dừng ở lỗi rõ ràng ("Lỗi xử lý PDF: ...") ngay
+            # dưới đây, không crash, không ảnh hưởng nhánh .pdf thật đang hoạt động.
             result = self._pdf_processor.process(file_path)
             if result.get("error"):
-                raise DesignFileLoaderError(f"Lỗi xử lý PDF {file_path}: {result['error']}")
+                raise DesignFileLoaderError(f"Lỗi xử lý PDF/AI {file_path}: {result['error']}")
             img = self._pdf_processor.to_pil_image(result)
             if img is None:
                 raise DesignFileLoaderError(f"PDF xử lý xong nhưng không render được ảnh: {file_path}")
@@ -85,8 +97,8 @@ class DesignFileLoader:
                 raise DesignFileLoaderError(f"Lỗi xử lý PSD {file_path}: {e}")
 
         raise DesignFileLoaderError(
-            f"Định dạng '{ext}' chưa được hỗ trợ (deprioritize theo thiết kế — AI/EPS/SVG "
-            f"không nằm trong phạm vi bắt buộc). Chỉ hỗ trợ: {sorted(_RASTER_EXTENSIONS)} + .pdf + .psd."
+            f"Định dạng '{ext}' chưa được hỗ trợ (deprioritize theo thiết kế — EPS/SVG "
+            f"không nằm trong phạm vi bắt buộc). Chỉ hỗ trợ: {sorted(_RASTER_EXTENSIONS)} + .pdf + .psd + .ai."
         )
 
     def to_base64(self, image: "Image.Image") -> str:

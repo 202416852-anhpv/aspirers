@@ -588,3 +588,42 @@ Xác nhận đúng thiết kế: 2 câu hỏi (top_platform_suggestion "tốt nh
 selected_platform_suitable "cái tôi chọn có ổn không") tách biệt hoàn toàn — top_platform_suggestion
 vẫn hợp lý theo niche, trong khi selected_platform_suitable trả lời thẳng "không" kèm lý do cụ
 thể trích đúng evidence thật, đúng yêu cầu.
+
+## 14. Hỗ trợ file .ai (Adobe Illustrator) — tái dùng nguyên vẹn pipeline PDF (2026-08-22)
+
+**Cơ chế**: mọi file `.ai` hiện đại (Illustrator 9/CS trở lên — hầu hết file .ai gặp trong thực
+tế) LUÔN nhúng kèm 1 bản PDF tương thích bên trong theo mặc định của Illustrator (`%PDF-1.x`
+header). `file_loader.py::load_as_image()` giờ route `.ai` vào ĐÚNG nhánh xử lý PDF sẵn có
+(`ext in (".pdf", ".ai")`) — KHÔNG viết parser riêng, KHÔNG thêm dependency mới (PyMuPDF/`fitz`
+đã có sẵn cho PDF). File `.ai` cực cũ (tiền-PDF-compatibility, trước 2001, hiếm gặp) sẽ khiến
+`fitz.open()` lỗi — `PDFProcessor.process()` đã tự bắt mọi lỗi từ trước (trả `{"error": ...}`,
+không raise) nên chỉ dừng ở thông báo lỗi rõ ràng, không crash, không ảnh hưởng nhánh `.pdf`
+thật đang hoạt động (contract/logic của `.pdf` giữ nguyên 100%, `.ai` chỉ CHIA SẺ chung nhánh).
+
+`orchestrator.py`/`_RASTER_EXTENSIONS` KHÔNG cần đổi — `.ai` vốn đã không phải raster nên tự
+động rơi vào đúng nhánh xử lý chung (viết tạm ảnh PNG đã render) giống `.pdf`/`.psd`, không cần
+thêm code. Nhánh import qua URL (`sniff_extension`) **đã tự hoạt động từ trước** — magic bytes
+`%PDF-` được nhận diện bất kể tên file gốc là gì, nên link trỏ tới file `.ai` hiện đại tự động
+route đúng, không cần sửa gì.
+
+Verify thật: tạo 1 PDF hợp lệ (PyMuPDF) lưu với đuôi `.ai` (mô phỏng đúng cấu trúc file .ai thật
+— header `%PDF-1.7`), chạy qua `DesignFileLoader.load_as_image()`:
+```
+SUCCESS: loaded image, size=(800, 600), mode=RGB
+pdf_type: digital_native | total_pages: 1
+native_text: "Test AI-compatible PDF content"  ← trích đúng text đã nhúng
+```
+
+Frontend: thêm `.ai` vào `accept` của input file + cập nhật hint text — KHÔNG đổi logic đoán
+ý định (`.ai` tự rơi vào nhánh "single design" như PDF/PSD, không phải batch).
+
+## 15. Giải nghĩa "metadata" trong brief mục 3 (Import CSV)
+
+Brief: *"Import CSV: Upload CSV chứa danh sách design (tên file, link, hoặc **metadata**) —
+batch xử lý hàng loạt"*. Diễn giải: "metadata" ở đây nhiều khả năng chỉ các cột **bổ sung ngữ
+cảnh đi kèm** design (platform, target_market/country, niche hint...) — KHÔNG phải cách thay thế
+hoàn toàn cho ảnh (Vision bắt buộc cần ảnh để phân loại, 1 dòng CHỈ có metadata mà không có
+file/link ảnh nào thì không đánh giá được gì). Đây đã ĐÚNG với những gì `csv_batch.py::
+_INPUT_COLUMN_ALIASES` đang làm — mỗi dòng CSV/XLSX có 1 cột design (link/path) CỘNG THÊM các
+cột metadata tuỳ chọn (`platform`, `target_country`/`country`/`market`/`target_market`,
+`niche_hint`/`niche`) đọc kèm và truyền xuống `process_one_design()`. Không có gap ở phần này.

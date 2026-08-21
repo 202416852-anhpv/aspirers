@@ -85,10 +85,10 @@ export function Composer({ onSubmit, disabled }: ComposerProps) {
       )}
 
       <div className="composer-box">
-        <button type="button" onClick={handleAttachClick} title="Đính kèm ảnh/PDF/PSD/CSV/XLSX" disabled={disabled}>
+        <button type="button" onClick={handleAttachClick} title="Đính kèm ảnh/PDF/PSD/AI/CSV/XLSX" disabled={disabled}>
           📎
         </button>
-        <input ref={fileInputRef} type="file" hidden onChange={handleFileChange} accept=".png,.jpg,.jpeg,.webp,.bmp,.pdf,.psd,.csv,.xlsx" />
+        <input ref={fileInputRef} type="file" hidden onChange={handleFileChange} accept=".png,.jpg,.jpeg,.webp,.bmp,.pdf,.psd,.ai,.csv,.xlsx" />
 
         <input
           type="text"
@@ -109,7 +109,7 @@ export function Composer({ onSubmit, disabled }: ComposerProps) {
       </div>
 
       <div className="composer-hint">
-        1 file ảnh/PDF/PSD hoặc link ảnh → kiểm tra 1 design. File .csv/.xlsx hoặc link Google Sheets/Drive → batch. Mỗi lượt gửi tốn 1 lần gọi API thật.
+        1 file ảnh/PDF/PSD/AI hoặc link ảnh → kiểm tra 1 design. File .csv/.xlsx hoặc link Google Sheets/Drive → batch. Mỗi lượt gửi tốn 1 lần gọi API thật.
       </div>
     </footer>
   );
