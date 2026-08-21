@@ -219,11 +219,15 @@ async def process_one_design(
 
     try:
         # ---- Call 1: Agent 1 Classify (TUẦN TỰ bắt buộc — Call 2 cần niche/OCR từ đây) ----
-        # detect_and_crop_faces (BlazeFace) + extract_text_blocks (RapidOCR, 2026-08-21):
-        # KHÔNG phụ thuộc classify (chỉ cần local_path, đã có sẵn) -> kick off CONCURRENT với
-        # Agent 1 để không cộng dồn latency (xong trước khi Agent 2/trademark cần tới, bên dưới).
-        face_crop_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_and_crop_faces, local_path))
-        text_blocks_task = asyncio.create_task(asyncio.to_thread(cc_opencv.extract_text_blocks, local_path))
+        # ⚠️ (2026-08-21, TẠM TẮT) detect_and_crop_faces (BlazeFace) + extract_text_blocks
+        # (RapidOCR) đã bị RÚT khỏi flow thật — cả 2 đều load model ONNX runtime lúc request,
+        # tái hiện thật trên Render: request xử lý ảnh đầu tiên làm process chết (SIGKILL, nghi
+        # OOM — free/starter tier RAM không đủ cho opencv-contrib + onnxruntime x2 model cùng
+        # lúc), response 502 KHÔNG qua CORSMiddleware (app đã chết) nên FE chỉ thấy "Failed to
+        # fetch" mơ hồ. Quyết định của nhóm: quay lại dùng CHÍNH Vision (Agent 1 bên dưới) làm
+        # nguồn OCR duy nhất — y hệt hành vi TRƯỚC KHI tích hợp RapidOCR/BlazeFace. 2 hàm gốc
+        # VẪN CÒN NGUYÊN trong opencv_modules.py (không xoá) — bật lại dễ dàng bằng cách khôi
+        # phục lại đúng 2 dòng asyncio.create_task() đã xoá ở đây, nếu sau này nâng RAM Render đủ.
         classify = await asyncio.to_thread(cc_agents.run_agent1_classify, vision_images)
 
         if pdf_meta and pdf_meta.get("pdf_type") == "digital_native" and pdf_meta.get("all_pages_native_text"):
@@ -246,28 +250,18 @@ async def process_one_design(
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
         }
-        # face_crop_task/text_blocks_task đã chạy song song từ lúc classify bắt đầu — await ở
-        # đây để lấy dữ liệu THẬT (crop mặt/text OCR) truyền cho Agent 2 + trademark_resolver.
-        # Lỗi ở 2 nhánh này KHÔNG được làm sập cả design (fail-open, giống mọi nhánh khác).
-        try:
-            face_crops_result = await face_crop_task
-        except Exception as e:
-            face_crops_result = e
-        face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
+        # ⚠️ (2026-08-21, TẠM TẮT) face_crops_result/text_blocks đặt cứng RỖNG — không còn
+        # gọi detect_and_crop_faces/extract_text_blocks (xem ghi chú phía trên). Agent 2 vẫn
+        # chạy bình thường ở nhánh song song bên dưới (TASK 1 — verify candidate logo/character/
+        # celebrity từ Agent 1 — không phụ thuộc OpenCV), chỉ tự động BỎ QUA TASK 2 (định danh
+        # mặt cắt) + TASK 3 (trademark sense-check theo block) vì num_face_crops=0/text_blocks
+        # rỗng (đã có sẵn guard trong agents.py::_build_agent2_prompt, không cần sửa gì thêm).
+        face_crops_result = {"faces": []}
+        text_blocks = []
 
-        try:
-            text_blocks_result = await text_blocks_task
-        except Exception as e:
-            text_blocks_result = e
-        text_blocks_result = _safe_or_default(text_blocks_result, {"text_blocks": []}, "extract_text_blocks", warnings)
-        text_blocks = text_blocks_result["text_blocks"]
-
-        # Trademark matching (Python, database THẬT) giờ ưu tiên dùng text OCR từ OpenCV
-        # (RapidOCR, extract_text_blocks — đọc chính xác hơn + có bbox thật cho từng cụm chữ)
-        # thay vì OCR_text của Vision (Agent 1) — chỉ fallback về Vision khi OpenCV không đọc
-        # được chữ nào (vd model rapidocr chưa cài, hoặc ảnh không có chữ dạng OpenCV nhận ra).
-        ocr_block_text = "\n".join(b["text"] for b in text_blocks) if text_blocks else ""
-        trademark_source_text = ocr_block_text or classify["OCR_text"]
+        # Trademark matching (Python, database THẬT) quay lại dùng THẲNG OCR_text của Vision
+        # (Agent 1) — nguồn OCR duy nhất bây giờ, đúng như trước khi có RapidOCR.
+        trademark_source_text = classify["OCR_text"]
 
         agent2_result, logo_match, char_match, trademark_flags, market = await asyncio.gather(
             asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], text_blocks),
