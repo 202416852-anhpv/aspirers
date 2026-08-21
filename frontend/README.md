@@ -12,6 +12,24 @@ python main.py   # hoặc: uvicorn main:app --reload
 
 Mặc định backend chạy ở `http://localhost:8000` (xem `backend/config.py`).
 
+## Deploy lên Vercel (production)
+
+Site này KHÔNG có build step — Vercel deploy thẳng file tĩnh, nghĩa là biến môi trường đặt
+trong Project Settings **KHÔNG tự inject** vào `.js`/`.html` (khác Next.js/Vite). Đã giải quyết
+bằng 1 Serverless Function nhỏ (`api/config.js`, Vercel tự nhận diện, không cần cấu hình thêm):
+
+1. Trên Vercel Project Settings → Environment Variables, set **`NEXT_PUBLIC_BACKEND_URL`** =
+   URL backend thật đã deploy (vd `https://xxx.onrender.com`, KHÔNG có dấu `/` cuối).
+2. `app.js` tự gọi `GET /api/config` lúc load trang để lấy giá trị này, dùng làm Backend URL mặc
+   định — **override thủ công trong Settings (⚙️) vẫn luôn thắng** nếu bạn từng tự gõ URL khác
+   (lưu ở `localStorage`, xem `loadBackendUrlFromServerConfig()` trong `app.js`).
+3. Đổi giá trị `NEXT_PUBLIC_BACKEND_URL` trên dashboard là có hiệu lực ngay ở lần load trang kế
+   tiếp — KHÔNG cần redeploy lại code (function đọc `process.env` tại request-time, không phải
+   build-time).
+
+Local dev vẫn hoạt động y hệt như trước (không có `/api/config` → tự fallback về
+`http://localhost:8000`, không cần set gì thêm).
+
 ## Mở frontend — chọn 1 trong 2 cách
 
 **Cách 1 — mở thẳng file (nhanh nhất):** double-click `index.html`.

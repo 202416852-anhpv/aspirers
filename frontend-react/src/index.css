@@ -1,0 +1,104 @@
+/* index.css — CSS LAYOUT TỐI THIỂU cho khung project, KHÔNG phải design system hoàn chỉnh.
+   Mục tiêu lượt này: cấu trúc điều hướng được, dễ đọc — màu sắc/spacing tinh chỉnh ở lượt sau. */
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; color: #1a1a1a; }
+
+.app-shell { display: flex; height: 100vh; }
+
+/* ---- Sidebar ---- */
+.sidebar { width: 260px; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 1rem; }
+.sidebar-header { display: flex; flex-direction: column; gap: 0.75rem; }
+.brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+.session-list { flex: 1; overflow-y: auto; margin-top: 1rem; }
+.session-list-empty { color: #888; font-size: 0.85rem; }
+.session-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; cursor: pointer; font-size: 0.85rem; }
+.session-verdict-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-safe { background: #1a8a4a; }
+.dot-risky { background: #a6720b; }
+.dot-blocked { background: #b3261e; }
+.dot-batch { background: #3b82f6; }
+.dot-error { background: #999; }
+.sidebar-footer { border-top: 1px solid #e0e0e0; padding-top: 0.75rem; }
+.health-indicator { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-unknown { background: #ccc; }
+.status-ok { background: #1a8a4a; }
+.status-fail { background: #b3261e; }
+
+/* ---- Main panel ---- */
+.main-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.settings-bar { display: flex; gap: 0.5rem; padding: 0.6rem 1rem; border-bottom: 1px solid #e0e0e0; }
+.settings-bar input, .settings-bar select { padding: 0.3rem 0.5rem; }
+
+.message-thread { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+.empty-state { margin: auto; text-align: center; color: #666; max-width: 400px; }
+.msg-row { display: flex; gap: 0.6rem; }
+.msg-user { flex-direction: row-reverse; }
+.msg-avatar { flex-shrink: 0; }
+.msg-bubble { background: #f5f5f5; border-radius: 12px; padding: 0.75rem 1rem; max-width: 720px; }
+.msg-user .msg-bubble { background: #e8f0fe; }
+
+/* ---- Composer ---- */
+.composer-area { border-top: 1px solid #e0e0e0; padding: 0.75rem 1rem; }
+.composer-chips { margin-bottom: 0.4rem; }
+.composer-file-chip { background: #eee; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+.composer-box { display: flex; align-items: center; gap: 0.5rem; }
+.composer-box input[type="text"] { flex: 1; padding: 0.5rem 0.75rem; border-radius: 999px; border: 1px solid #ccc; }
+.composer-hint { font-size: 0.75rem; color: #888; margin-top: 0.4rem; }
+
+/* ---- Result card ---- */
+.result-card { display: flex; flex-direction: column; gap: 0.4rem; }
+.section-title { font-weight: 600; font-size: 0.85rem; margin-top: 0.75rem; }
+.result-header { display: flex; align-items: center; gap: 0.6rem; }
+.verdict-badge { padding: 0.15rem 0.6rem; border-radius: 999px; font-weight: 700; font-size: 0.8rem; color: #fff; }
+.verdict-SAFE { background: #1a8a4a; }
+.verdict-RISKY { background: #a6720b; }
+.verdict-BLOCKED { background: #b3261e; }
+.source-note, .empty-note { font-size: 0.75rem; color: #888; }
+.warnings-banner { background: #fff6e0; border: 1px solid #a6720b; padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.8rem; }
+
+.meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; font-size: 0.85rem; }
+.meta-label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+
+.chip-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.chip { background: #fff; border: 1px solid #ddd; border-radius: 999px; padding: 0.12rem 0.55rem; font-size: 0.76rem; }
+.verify-badge { font-size: 0.72rem; }
+
+.image-overlay-wrap { position: relative; display: inline-block; max-width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; }
+.preview-img { display: block; max-width: 100%; height: auto; }
+.bbox-box { position: absolute; box-sizing: border-box; border: 2px solid; }
+.bbox-text { border-color: #3b82f6; background: rgba(59, 130, 246, 0.08); }
+.bbox-face { border-color: #9333ea; background: rgba(147, 51, 234, 0.08); }
+.bbox-label { position: absolute; top: -1.3em; left: -2px; background: inherit; color: #fff; font-size: 0.68rem; padding: 0.05rem 0.4rem; white-space: nowrap; }
+
+.evidence-item { border-radius: 6px; padding: 0.5rem 0.6rem; margin-bottom: 0.3rem; }
+.tag-RISKY { background: #fff6e0; }
+.tag-BLOCKED { background: #fde8e6; }
+.evidence-cat { font-weight: 600; font-size: 0.85rem; }
+.evidence-detail { font-size: 0.8rem; }
+
+.ocr-box, .reasoning-box { background: #f9f9f9; border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.82rem; white-space: pre-wrap; }
+.fix-item { font-size: 0.85rem; margin-bottom: 0.2rem; }
+.fix-violation { font-weight: 600; }
+.market-box { font-size: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.platform-suitability-banner { border-radius: 6px; padding: 0.5rem 0.6rem; }
+.platform-suitability-banner.yes { background: #e6f7ec; }
+.platform-suitability-banner.no { background: #fff6e0; }
+.font-disclaimer { font-size: 0.7rem; color: #999; margin-top: 0.5rem; }
+
+.grading-banner { border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.85rem; margin-bottom: 0.5rem; }
+.grading-banner.match { background: #e6f7ec; }
+.grading-banner.mismatch { background: #fde8e6; }
+.grading-expected-detail { font-size: 0.78rem; margin-top: 0.3rem; }
+
+/* ---- Batch ---- */
+.summary-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.summary-pill { background: #f5f5f5; border-radius: 8px; padding: 0.4rem 0.7rem; font-size: 0.8rem; display: flex; flex-direction: column; align-items: center; }
+.summary-pill b { font-size: 1.1rem; }
+.summary-pill .safe { color: #1a8a4a; }
+.summary-pill .risky { color: #a6720b; }
+.summary-pill .blocked { color: #b3261e; }
+.batch-row-label { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
+.batch-row-error { font-size: 0.85rem; }
+.error-note { color: #b3261e; font-size: 0.85rem; }

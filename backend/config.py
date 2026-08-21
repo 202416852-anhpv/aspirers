@@ -6,9 +6,15 @@ class Settings(BaseSettings):
     Các giá trị mặc định sẽ bị ghi đè nếu tìm thấy biến tương ứng trong file .env
     """
     # 1. Kệ đoạn này đi cứ biết là mình đang dùng claude haiku rồi
+    # ⚠️ (2026-08-21) Default gemini_model/gemini_base_url TỪNG là của Groq/Llama (sai hoàn
+    # toàn với hệ thống thật đang dùng Claude Haiku 4.5 qua Anthropic) — nếu deploy (Render)
+    # mà quên set 2 biến này, app sẽ ÂM THẦM gọi nhầm provider, không có cảnh báo nào (khác
+    # gemini_api_key đã có check ở main.py::_warn_if_missing_api_key). Sửa default về ĐÚNG giá
+    # trị thật (khớp example_env.txt) — thiếu biến giờ chỉ còn thiếu API key (đã có cảnh báo),
+    # không còn thiếu ĐÚNG PROVIDER nữa.
     gemini_api_key: str = "----"
-    gemini_model: str = "llama-3.1-8b-instant"
-    gemini_base_url: str = "https://api.groq.com/openai/v1"
+    gemini_model: str = "claude-haiku-4-5-20251001"
+    gemini_base_url: str = "https://api.anthropic.com/v1/"
 
     # 2. Cấu hình Server FastAPI Gateway
     port: int = 8000

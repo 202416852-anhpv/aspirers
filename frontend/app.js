@@ -14,7 +14,26 @@ let sessionCounter = 0;
 
 function getBackendUrl() {
   const val = document.getElementById("backend-url").value.trim().replace(/\/+$/, "");
-  return val || "http://localhost:8000";
+  return val || "http://localhost:8000"; // fallback CHỈ dùng khi local dev (chạy trực tiếp file,
+  // không qua /api/config) VÀ chưa có override thủ công nào — xem loadBackendUrlFromServerConfig().
+}
+
+// (2026-08-21) Site này KHÔNG có build step (vanilla JS, deploy thẳng lên Vercel dạng static) —
+// khác Next.js/Vite, Vercel KHÔNG tự inject biến môi trường (kể cả đặt tên NEXT_PUBLIC_*) vào
+// file .js tĩnh, vì không có bước build nào chạy để làm việc đó. Cách đúng để 1 static site đọc
+// được env var đã set trên Vercel: 1 Serverless Function nhỏ (frontend/api/config.js, Vercel tự
+// nhận diện MỌI file trong /api/*.js thành function, không cần cấu hình build gì thêm) đọc
+// process.env server-side rồi trả JSON — gọi 1 lần lúc load trang, chỉ dùng khi CHƯA có override
+// thủ công trong localStorage (Settings vẫn luôn thắng nếu người dùng tự đổi).
+async function loadBackendUrlFromServerConfig() {
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.backendUrl && data.backendUrl.trim() ? data.backendUrl.trim() : null;
+  } catch {
+    return null; // local dev (mở file trực tiếp, hoặc chạy static server không có /api) -> im lặng bỏ qua
+  }
 }
 
 function getCommonFields() {
@@ -37,9 +56,16 @@ function looksLikeUrl(str) {
 // Setup
 // ---------------------------------------------------------------------------
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const saved = localStorage.getItem(STORAGE_KEY_BACKEND_URL);
-  if (saved) document.getElementById("backend-url").value = saved;
+  if (saved) {
+    // Override thủ công (đã từng tự gõ trong Settings) -> LUÔN thắng, không gọi /api/config nữa.
+    document.getElementById("backend-url").value = saved;
+  } else {
+    const serverUrl = await loadBackendUrlFromServerConfig();
+    if (serverUrl) document.getElementById("backend-url").value = serverUrl;
+    // Không có gì cả (local dev không qua Vercel) -> giữ nguyên default trong index.html (localhost).
+  }
   document.getElementById("backend-url").addEventListener("change", (e) => {
     localStorage.setItem(STORAGE_KEY_BACKEND_URL, e.target.value.trim());
   });
