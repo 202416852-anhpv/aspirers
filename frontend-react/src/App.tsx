@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { Sidebar, type SessionItem } from "./components/layout/Sidebar";
 import { MessageThread, type ThreadMessage } from "./components/layout/MessageThread";
+import { LoadingIndicator } from "./components/layout/LoadingIndicator";
 import { SettingsBar, type SettingsValue } from "./components/composer/SettingsBar";
 import { Composer, type ComposerIntent } from "./components/composer/Composer";
 import { ResultCard } from "./components/result/ResultCard";
@@ -52,7 +53,7 @@ function App() {
     if (intent.kind === "single-file" || intent.kind === "single-url") {
       const label = intent.kind === "single-file" ? `📎 ${intent.file.name}` : `🔗 ${intent.url}`;
       pushMessage({ role: "user", content: label });
-      const loadingId = pushMessage({ role: "assistant", content: "Đang chạy Agent 1-4 (có thể mất vài chục giây)..." });
+      const loadingId = pushMessage({ role: "assistant", content: <LoadingIndicator variant="single" /> });
 
       const previewUrl =
         intent.kind === "single-file"
@@ -79,7 +80,7 @@ function App() {
     } else {
       const label = intent.kind === "batch-file" ? `📊 ${intent.file.name}` : `📊 ${intent.url}`;
       pushMessage({ role: "user", content: label });
-      const loadingId = pushMessage({ role: "assistant", content: "Đang chạy batch (mỗi dòng 1 lượt Agent 1-4)..." });
+      const loadingId = pushMessage({ role: "assistant", content: <LoadingIndicator variant="batch" /> });
 
       batchCheck.mutate(intent.kind === "batch-file" ? { file: intent.file, ...common } : { batch_file_url: intent.url, ...common }, {
         onSuccess: (report) => {
