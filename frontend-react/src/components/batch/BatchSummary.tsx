@@ -9,8 +9,16 @@ export interface BatchSummaryProps {
   data: BatchReport;
 }
 
+// (2026-08-22) FIX mojibake thật khi mở CSV trong Excel: file KHÔNG có BOM (byte order mark)
+// thì Excel KHÔNG tự nhận là UTF-8 — tự đoán nhầm sang bảng mã hệ thống (thường Windows-1252),
+// biến "thế" thành "tháº¿" (đúng byte UTF-8 của "ế", chỉ bị Excel đọc sai bảng mã). Dùng
+// escape ﻿ (KHÔNG gõ ký tự vô hình trực tiếp vào source — dễ bị editor/công cụ nào đó
+// vô tình làm hỏng/xoá mất vì không nhìn thấy được) — Excel + hầu hết ứng dụng khác tự nhận
+// diện đúng UTF-8 khi thấy BOM ở đầu file. KHÔNG liên quan gì tới tiếng Việt hay tiếng Anh.
+const UTF8_BOM = "﻿";
+
 function downloadCsv(csvExport: string) {
-  const blob = new Blob([csvExport], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([UTF8_BOM + csvExport], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
