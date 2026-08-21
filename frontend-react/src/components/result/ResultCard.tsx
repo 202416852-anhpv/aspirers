@@ -14,6 +14,10 @@ export interface ResultCardProps {
   result: DesignComplianceResult;
   grading?: GradingInfo | null;
   previewUrl?: string | null;
+  /** (2026-08-22) Mặc định true (single check). BatchRowMessage truyền false — khoanh vùng ảnh
+   * CHỈ áp dụng cho 1 design đơn (upload file/dán link), KHÔNG áp dụng cho batch (kể cả khi
+   * batch row tình cờ có previewUrl là 1 URL http(s) hợp lệ), theo đúng yêu cầu đã chốt. */
+  showOverlay?: boolean;
 }
 
 function GradingBanner({ grading }: { grading: GradingInfo }) {
@@ -34,7 +38,7 @@ function GradingBanner({ grading }: { grading: GradingInfo }) {
   );
 }
 
-export function ResultCard({ result: r, grading, previewUrl = null }: ResultCardProps) {
+export function ResultCard({ result: r, grading, previewUrl = null, showOverlay = true }: ResultCardProps) {
   return (
     <div className="result-card">
       {grading && <GradingBanner grading={grading} />}
@@ -59,7 +63,7 @@ export function ResultCard({ result: r, grading, previewUrl = null }: ResultCard
         </div>
       </div>
 
-      <ImageOverlay previewUrl={previewUrl} flaggedRegions={r.flagged_regions} />
+      {showOverlay && <ImageOverlay previewUrl={previewUrl} flaggedRegions={r.flagged_regions} />}
 
       <div className="section-title">
         Logo nghi ngờ <span className="empty-note">(✅/❌ = Agent 2 đã kiểm tra lại ảnh)</span>

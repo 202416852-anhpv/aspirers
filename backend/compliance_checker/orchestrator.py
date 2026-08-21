@@ -85,8 +85,11 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
        đã rút khỏi flow, xem orchestrator.process_one_design) nên nhánh này hiện KHÔNG sinh box
        nào — giữ nguyên code (không phải dead code thật, chỉ đang thiếu nguồn bbox) để tự động
        hoạt động lại nếu sau này bật lại RapidOCR.
-    2. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
-       nhận diện được, tránh khoanh vùng những mặt vô hại).
+    2. detected_faces đã merge (Agent 2 TASK 2) — (2026-08-22, ĐỔI) giờ khoanh TOÀN BỘ khuôn mặt
+       BlazeFace phát hiện được, KỂ CẢ mặt Agent 2 KHÔNG nhận diện được danh tính — trước đây chỉ
+       khoanh mục có suspected_name, bỏ sót phần lớn crop thật (đa số mặt trong ảnh thường KHÔNG
+       phải người nổi tiếng). Theo yêu cầu: hiện đúng những gì BlazeFace THẬT SỰ crop được, không
+       ẩn bớt — label phân biệt rõ "đã nhận diện được tên" vs "chưa xác định được là ai".
 
     text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) KHÔNG còn góp bbox ở đây nữa — từ
     khi TASK 3 chuyển sang dùng OCR_text thô (agents.py::run_agent2_verify_candidates, không còn
@@ -110,13 +113,16 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
                 break  # 1 block khớp đầu tiên là đủ, tránh box trùng lặp cho cùng 1 phrase
 
     for face in detected_faces or []:
-        if face.get("suspected_name"):
-            out.append({
-                "kind": "face",
-                "bbox_norm": face.get("bbox_norm", []),
-                "label": face["suspected_name"],
-                "detail": face.get("reasoning", ""),
-            })
+        bbox = face.get("bbox_norm")
+        if not bbox:
+            continue  # thiếu toạ độ thật -> bỏ qua, KHÔNG đoán (nguyên tắc chung của hàm này)
+        suspected_name = face.get("suspected_name")
+        out.append({
+            "kind": "face",
+            "bbox_norm": bbox,
+            "label": suspected_name or "Khuôn mặt phát hiện (chưa xác định danh tính)",
+            "detail": face.get("reasoning", "") or "BlazeFace phát hiện có khuôn mặt tại đây — Agent 2 không xác định được đây là ai cụ thể.",
+        })
     return out
 
 

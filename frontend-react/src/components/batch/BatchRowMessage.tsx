@@ -1,9 +1,11 @@
 // components/batch/BatchRowMessage.tsx — 1 row batch = 1 message riêng (thay bảng-to-click-
 // expand của bản cũ). Tái dùng thẳng ResultCard — đúng tư duy "dùng chung cho single + batch".
 //
-// ⚠️ Giới hạn đã biết (kế thừa từ bản cũ, không phải bug mới): previewUrl CHỈ có khi
-// input_ref là URL http(s) — batch dùng file_path (phổ biến khi test local) sẽ KHÔNG có ảnh
-// preview/overlay, chỉ hiện phần text (verdict/evidence/reasoning...) vẫn đầy đủ.
+// ⚠️ (2026-08-22) Khoanh vùng ảnh (ImageOverlay, bbox text/face) CHỈ áp dụng cho 1 design đơn
+// (upload file hoặc dán link) — batch KHÔNG hiện, theo đúng yêu cầu đã chốt. Truyền
+// showOverlay={false} cho ResultCard — KHÔNG còn tính previewUrl ở đây nữa (dù input_ref là
+// URL http(s) hợp lệ cũng không dùng tới, vì ResultCard bỏ qua ImageOverlay hoàn toàn khi
+// showOverlay=false).
 
 import type { BatchRowResult } from "../../api/types";
 import { ResultCard } from "../result/ResultCard";
@@ -17,14 +19,12 @@ export function BatchRowMessage({ row }: { row: BatchRowResult }) {
     );
   }
 
-  const previewUrl = /^https?:\/\//i.test(row.input_ref) ? row.input_ref : null;
-
   return (
     <div>
       <div className="batch-row-label">
         Dòng #{row.row_index} — {row.input_ref}
       </div>
-      <ResultCard result={row.result} grading={row.grading} previewUrl={previewUrl} />
+      <ResultCard result={row.result} grading={row.grading} showOverlay={false} />
     </div>
   );
 }

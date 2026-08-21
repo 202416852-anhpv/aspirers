@@ -45,7 +45,7 @@ export function ImageOverlay({ previewUrl, flaggedRegions }: ImageOverlayProps) 
         ))}
       </div>
       <p className="empty-note">
-        Khung xanh dương: text nghi trademark (database + Agent 2 tự đánh giá). Khung tím: khuôn mặt Agent 2 nhận diện được. Bấm/hover để xem lý do.
+        Khung xanh dương: text nghi trademark (database + Agent 2 tự đánh giá). Khung tím: mọi khuôn mặt BlazeFace phát hiện được (kể cả chưa xác định được là ai). Bấm/hover để xem lý do.
       </p>
     </div>
   );

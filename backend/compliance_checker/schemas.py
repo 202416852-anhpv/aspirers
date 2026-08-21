@@ -251,13 +251,17 @@ class DetectedFace(BaseModel):
 
 
 class FlaggedRegion(BaseModel):
-    """(2026-08-21) Danh sách RÚT GỌN, CHỈ gồm vùng ĐÁNG NGHI trên ảnh gốc (text nghi trademark
-    HOẶC mặt Agent 2 nhận diện được) — để FE vẽ khung khoanh vùng thẳng lên ảnh gốc, KHÔNG còn
-    hiện thumbnail crop riêng (theo đúng yêu cầu). Xây dựng THUẦN PYTHON (orchestrator.py) từ
-    text_trademark_flags + detected_faces đã có bbox thật — KHÔNG phải LLM tự đoán toạ độ."""
+    """(2026-08-21) Danh sách vùng trên ảnh gốc để FE vẽ khung khoanh vùng thẳng lên ảnh gốc,
+    KHÔNG còn hiện thumbnail crop riêng (theo đúng yêu cầu). Xây dựng THUẦN PYTHON
+    (orchestrator.py::_build_flagged_regions) từ trademark_flags + detected_faces đã có bbox
+    thật — KHÔNG phải LLM tự đoán toạ độ.
+    kind=text: CHỈ gồm phrase khớp database thật (rút gọn, không phải mọi text block).
+    kind=face: (2026-08-22, ĐỔI) TOÀN BỘ khuôn mặt BlazeFace crop được, KỂ CẢ mặt Agent 2 KHÔNG
+    xác định được danh tính (label = 'Khuôn mặt phát hiện (chưa xác định danh tính)') — không
+    còn ẩn bớt như trước, hiện đúng những gì detector THẬT SỰ tìm thấy."""
     kind: Literal["text", "face"]
     bbox_norm: List[float] = Field(..., description="[x0,y0,x1,y1] normalize 0-1 trên ảnh GỐC")
-    label: str = Field(..., description="kind=text: cụm từ bị nghi ngờ. kind=face: tên người bị nghi ngờ.")
+    label: str = Field(..., description="kind=text: cụm từ bị nghi ngờ. kind=face: tên người nếu nhận diện được, ngược lại nhãn 'chưa xác định danh tính'.")
     detail: str = Field(default="", description="Lý do/reasoning ngắn gọn")
 
 
