@@ -219,15 +219,14 @@ async def process_one_design(
 
     try:
         # ---- Call 1: Agent 1 Classify (TUẦN TỰ bắt buộc — Call 2 cần niche/OCR từ đây) ----
-        # ⚠️ (2026-08-21, TẠM TẮT) detect_and_crop_faces (BlazeFace) + extract_text_blocks
-        # (RapidOCR) đã bị RÚT khỏi flow thật — cả 2 đều load model ONNX runtime lúc request,
-        # tái hiện thật trên Render: request xử lý ảnh đầu tiên làm process chết (SIGKILL, nghi
-        # OOM — free/starter tier RAM không đủ cho opencv-contrib + onnxruntime x2 model cùng
-        # lúc), response 502 KHÔNG qua CORSMiddleware (app đã chết) nên FE chỉ thấy "Failed to
-        # fetch" mơ hồ. Quyết định của nhóm: quay lại dùng CHÍNH Vision (Agent 1 bên dưới) làm
-        # nguồn OCR duy nhất — y hệt hành vi TRƯỚC KHI tích hợp RapidOCR/BlazeFace. 2 hàm gốc
-        # VẪN CÒN NGUYÊN trong opencv_modules.py (không xoá) — bật lại dễ dàng bằng cách khôi
-        # phục lại đúng 2 dòng asyncio.create_task() đã xoá ở đây, nếu sau này nâng RAM Render đủ.
+        # detect_and_crop_faces (BlazeFace, 2026-08-21 BẬT LẠI): KHÔNG phụ thuộc classify (chỉ
+        # cần local_path, đã có sẵn) -> kick off CONCURRENT với Agent 1 để không cộng dồn
+        # latency (xong trước khi Agent 2 cần tới, bên dưới).
+        # ⚠️ extract_text_blocks (RapidOCR) VẪN TẮT — nghi ngờ đây mới là model tốn RAM nhất
+        # (3 model ONNX detect+classify+recognize cùng lúc, so với BlazeFace chỉ 1 model nhẹ) —
+        # tái hiện thật OOM 502 trên Render khi cả 2 cùng chạy. OCR text vẫn dùng Vision (Agent 1
+        # bên dưới) làm nguồn duy nhất cho tới khi xác nhận RapidOCR an toàn để bật lại riêng.
+        face_crop_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_and_crop_faces, local_path))
         classify = await asyncio.to_thread(cc_agents.run_agent1_classify, vision_images)
 
         if pdf_meta and pdf_meta.get("pdf_type") == "digital_native" and pdf_meta.get("all_pages_native_text"):
@@ -250,13 +249,19 @@ async def process_one_design(
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
         }
-        # ⚠️ (2026-08-21, TẠM TẮT) face_crops_result/text_blocks đặt cứng RỖNG — không còn
-        # gọi detect_and_crop_faces/extract_text_blocks (xem ghi chú phía trên). Agent 2 vẫn
-        # chạy bình thường ở nhánh song song bên dưới (TASK 1 — verify candidate logo/character/
-        # celebrity từ Agent 1 — không phụ thuộc OpenCV), chỉ tự động BỎ QUA TASK 2 (định danh
-        # mặt cắt) + TASK 3 (trademark sense-check theo block) vì num_face_crops=0/text_blocks
-        # rỗng (đã có sẵn guard trong agents.py::_build_agent2_prompt, không cần sửa gì thêm).
-        face_crops_result = {"faces": []}
+        # face_crop_task đã chạy song song từ lúc classify bắt đầu — await ở đây để lấy dữ
+        # liệu THẬT (crop mặt) truyền cho Agent 2. Lỗi ở nhánh này KHÔNG được làm sập cả design
+        # (fail-open, giống mọi nhánh khác).
+        try:
+            face_crops_result = await face_crop_task
+        except Exception as e:
+            face_crops_result = e
+        face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
+
+        # ⚠️ text_blocks VẪN đặt cứng RỖNG — extract_text_blocks (RapidOCR) vẫn tắt (xem ghi
+        # chú phía trên). Agent 2 tự động BỎ QUA TASK 3 (trademark sense-check theo block) vì
+        # text_blocks rỗng (guard sẵn trong agents.py::_build_agent2_prompt), vẫn chạy đủ TASK 1
+        # (verify candidate) + TASK 2 (định danh mặt cắt, nhờ face_crops_result vừa bật lại).
         text_blocks = []
 
         # Trademark matching (Python, database THẬT) quay lại dùng THẲNG OCR_text của Vision
