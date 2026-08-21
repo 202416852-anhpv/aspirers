@@ -10,9 +10,10 @@ import { SettingsBar, type SettingsValue } from "./components/composer/SettingsB
 import { Composer, type ComposerIntent } from "./components/composer/Composer";
 import { ResultCard } from "./components/result/ResultCard";
 import { BatchSummary } from "./components/batch/BatchSummary";
+import { BatchProgress } from "./components/batch/BatchProgress";
 import { useCheckDesign } from "./hooks/useCheckDesign";
-import { useBatchCheck } from "./hooks/useBatchCheck";
-import { checkHealth, getBackendUrl, setBackendUrl } from "./api/client";
+import { checkHealth, getBackendUrl, setBackendUrl, runBatchByFileStreaming, runBatchByUrlStreaming } from "./api/client";
+import type { BatchRowResult } from "./api/types";
 
 let nextId = 0;
 const uid = () => `msg-${nextId++}`;
@@ -26,9 +27,15 @@ function App() {
     targetCountry: "US",
   });
   const [backendHealthy, setBackendHealthy] = useState<boolean | null>(null);
+  // (2026-08-22) batch giờ dùng route streaming (runBatchByFileStreaming/runBatchByUrlStreaming,
+  // xem handleSubmit) thay vì useBatchCheck (TanStack Query mutation, xem hooks/useBatchCheck.ts
+  // — GIỮ NGUYÊN file đó, không xoá, chỉ không dùng ở đây nữa). Lý do: streaming cần callback
+  // onRow() bắn liên tục TRONG LÚC promise còn đang chạy để cập nhật Progress — không khớp tốt
+  // với mô hình "1 mutation = 1 lần resolve" của useMutation, nên gọi thẳng hàm client.ts +
+  // state pending riêng ở đây thay vì cố ép vào abstraction đó.
+  const [batchPending, setBatchPending] = useState(false);
 
   const checkDesign = useCheckDesign();
-  const batchCheck = useBatchCheck();
 
   function pushMessage(msg: Omit<ThreadMessage, "id">) {
     const id = uid();
@@ -79,23 +86,42 @@ function App() {
     } else {
       const label = intent.kind === "batch-file" ? `📊 ${intent.file.name}` : `📊 ${intent.url}`;
       pushMessage({ role: "user", content: label });
-      const loadingId = pushMessage({ role: "assistant", content: <LoadingIndicator variant="batch" /> });
+      const loadingId = pushMessage({ role: "assistant", content: <BatchProgress done={0} safe={0} risky={0} blocked={0} error={0} /> });
 
-      batchCheck.mutate(intent.kind === "batch-file" ? { file: intent.file, ...common } : { batch_file_url: intent.url, ...common }, {
-        onSuccess: (report) => {
-          // (2026-08-22) CHỈ còn 1 message tóm tắt (BatchSummary — thống kê + nút tải CSV) —
-          // KHÔNG còn render N ResultCard chi tiết từng dòng nữa (bản cũ, xem
-          // components/batch/BatchRowMessage.tsx — vẫn giữ file đó, không xoá, chỉ không dùng ở
-          // đây). Lý do: batch lớn (chục dòng) làm rối màn hình chat — chi tiết từng dòng vẫn có
-          // đầy đủ trong CSV tải về (backend đã trả sẵn qua report.csv_export).
+      // (2026-08-22) đếm cục bộ trong closure (KHÔNG phải useState) — đủ dùng vì chỉ cần
+      // replaceMessage() ngay khi có dòng mới, không cần re-render component nào khác theo số
+      // này; dùng useState ở đây chỉ tạo thêm 1 lần re-render thừa mỗi dòng mà không lợi gì thêm.
+      const counts = { done: 0, safe: 0, risky: 0, blocked: 0, error: 0 };
+      const onRow = (row: BatchRowResult) => {
+        counts.done += 1;
+        if (row.status === "ERROR") counts.error += 1;
+        else if (row.result?.final_verdict === "SAFE") counts.safe += 1;
+        else if (row.result?.final_verdict === "RISKY") counts.risky += 1;
+        else if (row.result?.final_verdict === "BLOCKED") counts.blocked += 1;
+        replaceMessage(loadingId, <BatchProgress {...counts} />);
+      };
+
+      setBatchPending(true);
+      const streamPromise =
+        intent.kind === "batch-file"
+          ? runBatchByFileStreaming({ file: intent.file, ...common }, { onRow })
+          : runBatchByUrlStreaming({ batch_file_url: intent.url, ...common }, { onRow });
+
+      streamPromise
+        .then((report) => {
+          // (2026-08-22) Sau khi stream xong, CHỈ còn 1 message tóm tắt (BatchSummary —
+          // thống kê + nút tải CSV) — KHÔNG còn render N ResultCard chi tiết từng dòng nữa (bản
+          // cũ, xem components/batch/BatchRowMessage.tsx — vẫn giữ file đó, không xoá, chỉ
+          // không dùng ở đây). Lý do: batch lớn (chục dòng) làm rối màn hình chat — chi tiết
+          // từng dòng vẫn có đầy đủ trong CSV tải về (backend đã trả sẵn qua report.csv_export).
           replaceMessage(loadingId, <BatchSummary data={report} />);
           setSessions((prev) => [...prev, { id: loadingId, label: `${label} (${report.total} dòng)`, verdict: "BATCH" }]);
-        },
-        onError: (err) => {
+        })
+        .catch((err: Error) => {
           replaceMessage(loadingId, <span className="error-note">Lỗi: {err.message}</span>);
           setSessions((prev) => [...prev, { id: loadingId, label, verdict: "ERROR" }]);
-        },
-      });
+        })
+        .finally(() => setBatchPending(false));
     }
   }
 
@@ -109,7 +135,7 @@ function App() {
       <main className="main-panel">
         <SettingsBar value={settings} onChange={setSettings} onCheckHealth={handleCheckHealth} />
         <MessageThread messages={messages} />
-        <Composer onSubmit={handleSubmit} disabled={checkDesign.isPending || batchCheck.isPending} />
+        <Composer onSubmit={handleSubmit} disabled={checkDesign.isPending || batchPending} />
       </main>
     </div>
   );

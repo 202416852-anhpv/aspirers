@@ -391,7 +391,10 @@ async def process_one_design(
                 pass
 
 
-async def process_batch(rows: list[dict], platform: "str | None" = None, target_country: str = "US", max_concurrency: int = 1) -> dict:
+async def process_batch(
+    rows: list[dict], platform: "str | None" = None, target_country: str = "US", max_concurrency: int = 1,
+    on_row_done=None,
+) -> dict:
     """
     rows: list dict đã chuẩn hoá từ csv_batch.parse_csv_rows() (có _row_index, _input_ref,
     file_path/url tuỳ dòng). Exception ở 1 design KHÔNG được làm hỏng cả batch — catch riêng
@@ -405,6 +408,13 @@ async def process_batch(rows: list[dict], platform: "str | None" = None, target_
     thể chạm trần RAM gói Render đang dùng — vẫn cần xác nhận RAM thật của gói đó). Vẫn nhận
     tham số max_concurrency > 1 nếu caller CHỦ Ý truyền vào (route/schema cho phép 1-20), CHỈ đổi
     GIÁ TRỊ MẶC ĐỊNH khi không truyền gì.
+
+    on_row_done: (2026-08-22, MỚI) hook OPTIONAL, coroutine `async def(row_result: dict)`, được
+    gọi NGAY khi 1 row xử lý xong (không đợi cả batch) — dùng cho process_batch_streaming() bên
+    dưới để "nghe" từng row sớm mà KHÔNG cần viết lại logic per-row (fault isolation/self-grading)
+    lần 2. None (mặc định) -> KHÔNG có side-effect gì, hành vi hàm này giữ NGUYÊN 100% như trước
+    khi có tham số này — mọi caller cũ (route /batch-csv, /batch-json không đổi) không bị ảnh
+    hưởng.
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -435,12 +445,13 @@ async def process_batch(rows: list[dict], platform: "str | None" = None, target_
                         "expected": expected,
                         "verdict_match": expected.get("expected_verdict") == result["final_verdict"],
                     }
-                return row_result
             except Exception as e:
                 row_result = {"row_index": row["_row_index"], "input_ref": row["_input_ref"], "status": "ERROR", "result": None, "error": str(e)}
                 if expected:
                     row_result["grading"] = {"expected": expected, "verdict_match": False}
-                return row_result
+            if on_row_done is not None:
+                await on_row_done(row_result)
+            return row_result
 
     row_results = await asyncio.gather(*[with_limit(r) for r in rows], return_exceptions=True)
 
@@ -480,3 +491,58 @@ async def process_batch(rows: list[dict], platform: "str | None" = None, target_
         "verdict_accuracy": verdict_accuracy,
         "rows": clean_rows,
     }
+
+
+async def process_batch_streaming(
+    rows: list[dict], platform: "str | None" = None, target_country: str = "US", max_concurrency: int = 1,
+):
+    """
+    (2026-08-22, MỚI) Biến thể STREAMING của process_batch() — dùng cho route NDJSON
+    (api/routes.py::/batch-csv-stream, /batch-json-stream) để tránh timeout tầng gateway/proxy.
+
+    ⚠️ Phát hiện thật: batch tuần tự (process_batch gốc, 1 response JSON duy nhất SAU KHI xong
+    hết) với design nặng thật dễ mất 7-16 phút cho 10 dòng — "Failed to fetch" xuất hiện đúng
+    lúc ~1 phút, khớp idle-read-timeout phổ biến của Cloudflare (Render fronts qua Cloudflare),
+    KHÔNG phải OOM nữa (đã tách biệt 2 nguyên nhân qua test thật, xem docs.md). Route thường
+    (/batch-csv, /batch-json) giữ NGUYÊN không đổi cho nhu cầu cần 1 response JSON chuẩn (vd
+    script chấm điểm gọi trực tiếp) — hàm/route này CHỈ THÊM MỚI cho FE dùng.
+
+    Async GENERATOR: yield NGAY 1 dict row_result khi 1 row xử lý xong (không đợi cả batch),
+    giữ HTTP connection có traffic THẬT chảy liên tục thay vì im lặng suốt — mỗi item yield ra
+    là 1 trong 2 dạng:
+      - dict row_result thường (status/result/error/...) — 1 item/design, theo đúng thứ tự
+        HOÀN THÀNH (không nhất thiết theo row_index nếu max_concurrency > 1).
+      - Item CUỐI CÙNG: {"summary": {...}} — verdict_accuracy/counts giống hệt process_batch()
+        gốc, TRỪ field "rows" (đã stream từng dòng ở trên rồi, tránh gửi trùng lặp) và TRỪ
+        "csv_export" (routes.py tự build từ các row đã stream qua — orchestrator.py KHÔNG cần
+        biết về csv_batch.py, giữ đúng ranh giới trách nhiệm cũ).
+
+    Logic per-row (fault isolation, self-grading) TÁI DÙNG NGUYÊN VẸN qua process_batch() +
+    on_row_done hook — KHÔNG viết lại, tránh drift giữa 2 bản triển khai.
+    """
+    queue: "asyncio.Queue" = asyncio.Queue()
+    _DONE = object()
+
+    async def on_row_done(row_result: dict):
+        await queue.put(row_result)
+
+    async def runner():
+        try:
+            batch_result = await process_batch(
+                rows, platform=platform, target_country=target_country, max_concurrency=max_concurrency,
+                on_row_done=on_row_done,
+            )
+            summary = {k: v for k, v in batch_result.items() if k != "rows"}
+            await queue.put({"summary": summary})
+        except Exception as e:
+            # Lưới an toàn kép — process_batch() bản thân đã fail-open per-row, nhánh này chỉ
+            # bắt lỗi hạ tầng ngoài dự kiến (vd bug thật) để KHÔNG treo generator vô thời hạn.
+            await queue.put({"summary": {"error": str(e)}})
+        await queue.put(_DONE)
+
+    asyncio.create_task(runner())
+    while True:
+        item = await queue.get()
+        if item is _DONE:
+            return
+        yield item

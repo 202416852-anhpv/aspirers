@@ -651,3 +651,39 @@ N `ResultCard` chi tiết từng dòng trong chat nữa (giảm rối màn hình
 từng dòng vẫn đầy đủ trong CSV tải về (`report.csv_export`, cơ chế đã có sẵn từ trước, không
 phải tính năng mới). `BatchRowMessage.tsx` GIỮ NGUYÊN (không xoá), chỉ không còn được gọi từ
 App.tsx — dễ bật lại nếu sau này cần hiện chi tiết ngay trong chat.
+
+## 17. Batch streaming (NDJSON) — sửa timeout gateway thật + hiện Progress real-time (2026-08-22)
+
+**Xác nhận nguyên nhân thật** (không còn là OOM): tuần tự (mục 16) vẫn "Failed to fetch" —
+user xác nhận lỗi xuất hiện **~1 phút trở lên**, khớp idle-read-timeout phổ biến của Cloudflare
+(Render fronts qua Cloudflare) chứ không phải crash tức thời. Route `/batch-csv`/`/batch-json`
+là **1 request HTTP chặn tới khi TOÀN BỘ batch xong** mới trả 1 JSON — batch nhiều dòng nặng
+(7-16 phút/10 dòng) chắc chắn vượt mọi timeout gateway hợp lý, không liên quan `max_concurrency`.
+
+**Đã thêm 2 route MỚI song song, KHÔNG đổi 2 route cũ**:
+- `POST /batch-csv-stream`, `POST /batch-json-stream` — trả `Content-Type: application/x-ndjson`,
+  mỗi dòng (kết thúc `\n`) là 1 JSON: từng row NGAY khi xong, dòng CUỐI là `{"summary": {...}}`
+  (kèm `csv_export`). Giữ HTTP connection có traffic thật chảy liên tục — vô hiệu hoá idle-timeout.
+- `/batch-csv`, `/batch-json` GIỮ NGUYÊN 100% (không đổi 1 dòng thân hàm) — vẫn dùng được cho
+  script chấm điểm tự động cần 1 response JSON chuẩn.
+- `orchestrator.process_batch()` chỉ thêm 1 tham số OPTIONAL `on_row_done` (coroutine hook, mặc
+  định `None` = hành vi cũ y hệt) — `process_batch_streaming()` (hàm MỚI) tái dùng qua hook này,
+  KHÔNG viết lại logic per-row (fault isolation/self-grading) lần 2, tránh drift giữa 2 bản.
+
+Verify thật (FastAPI `TestClient`, in-process, không cần deploy): `POST /batch-json-stream` 1
+dòng → `200 OK`, `Content-Type: application/x-ndjson`, 2 dòng NDJSON nhận được (1 row + 1
+summary). Verify timing streaming thật (gọi thẳng `process_batch_streaming()`, 2 design nặng):
+```
+[42.2s] YIELD row 1 (BLOCKED)
+[91.6s] YIELD row 2 (BLOCKED)   ← có traffic thật ở 42.2s, KHÔNG im lặng suốt tới 91.6s như trước
+[91.6s] YIELD summary
+```
+
+**FE**: `client.ts` thêm `runBatchByFileStreaming`/`runBatchByUrlStreaming` (đọc
+`ReadableStream` + buffer NDJSON, verify riêng logic buffer với dòng JSON bị network cắt làm 2
+chunk — vẫn parse đúng). `App.tsx` gọi thẳng 2 hàm này (KHÔNG qua `useBatchCheck`/TanStack Query
+— mô hình "1 mutation = 1 lần resolve" không hợp với callback `onRow` bắn liên tục giữa chừng),
+hiện **`BatchProgress`** (component MỚI) — cập nhật NGAY sau MỖI dòng: `"⏳ Progress: N... (X
+SAFE, Y RISKY, Z BLOCKED)"` — thay cho 1 dòng "đang chạy..." đứng yên suốt batch. Xong stream ->
+đổi thành `BatchSummary` như cũ (mục 16, chỉ thống kê + nút tải CSV, không còn N ResultCard chi
+tiết). `useBatchCheck.ts` GIỮ NGUYÊN không xoá, chỉ không còn được `App.tsx` gọi.
