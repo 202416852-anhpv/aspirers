@@ -24,9 +24,21 @@ export interface SuspectedCelebrity {
   confidence: Confidence;
 }
 
+/** (2026-08-22, MỚI) Cùng pattern candidate-generation với SuspectedLogo/Character/Celebrity. */
+export interface SuspectedFont {
+  font_name_guess: string;
+  confidence: Confidence;
+}
+
+/** (2026-08-22, MỚI) Cùng pattern candidate-generation với SuspectedLogo/Character/Celebrity. */
+export interface SuspectedArtwork {
+  artwork_name: string;
+  confidence: Confidence;
+}
+
 /** Agent 2 xác nhận CÓ/KHÔNG cho từng candidate Agent 1 nêu — nhị phân, KHÔNG có field số nào. */
 export interface VerificationItem {
-  category: "logo" | "character" | "celebrity";
+  category: "logo" | "character" | "celebrity" | "font" | "artwork";
   name: string;
   present: boolean;
   reasoning: string;
@@ -85,12 +97,16 @@ export type SourceType = "image" | "pdf_digital_native" | "pdf_scanned" | "psd" 
  * POST /api/compliance/check | /check-upload, hoặc BatchRowResult.result trong batch. */
 export interface DesignComplianceResult {
   niche: string;
+  /** (2026-08-22, MỚI) Niche con cụ thể hơn (vd niche="christmas_holiday" -> sub_niche="ugly_christmas_sweater"). */
+  sub_niche: string;
   style: string;
   motifs: string[];
   OCR_text: string;
   suspected_logos: SuspectedLogo[];
   suspected_characters: SuspectedCharacter[];
   suspected_celebrities: SuspectedCelebrity[];
+  suspected_fonts: SuspectedFont[];
+  suspected_artworks: SuspectedArtwork[];
   verifications: VerificationItem[];
 
   final_verdict: Verdict;

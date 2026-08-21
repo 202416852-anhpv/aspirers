@@ -244,6 +244,8 @@ async def process_one_design(
             "logos": classify["suspected_logos"],
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
+            "fonts": classify["suspected_fonts"],
+            "artworks": classify["suspected_artworks"],
         }
         # face_crop_task đã chạy song song từ lúc classify bắt đầu — await ở đây để lấy dữ
         # liệu THẬT (crop mặt) truyền cho Agent 2. Lỗi ở nhánh này KHÔNG được làm sập cả design
@@ -304,6 +306,8 @@ async def process_one_design(
             agent2_verifications=agent2_result["verifications"],
             face_identifications=agent2_result["face_identifications"],
             text_trademark_flags=agent2_result["text_trademark_flags"],
+            suspected_fonts=classify["suspected_fonts"],
+            suspected_artworks=classify["suspected_artworks"],
         )
 
         # ---- Nhóm C: tổng hợp + định vị (1 LLM call) ----
@@ -311,6 +315,8 @@ async def process_one_design(
             "suspected_logos": classify["suspected_logos"],
             "suspected_characters": classify["suspected_characters"],
             "suspected_celebrities": classify["suspected_celebrities"],
+            "suspected_fonts": classify["suspected_fonts"],
+            "suspected_artworks": classify["suspected_artworks"],
             "agent2_verifications": agent2_result["verifications"],
             "text_trademark_flags": agent2_result["text_trademark_flags"],
             "logo_match": logo_match, "char_match": char_match,
@@ -333,12 +339,15 @@ async def process_one_design(
 
         return {
             "niche": niche,
+            "sub_niche": classify["sub_niche"],
             "style": classify["style"],
             "motifs": classify["motifs"],
             "OCR_text": classify["OCR_text"],
             "suspected_logos": classify["suspected_logos"],
             "suspected_characters": classify["suspected_characters"],
             "suspected_celebrities": classify["suspected_celebrities"],
+            "suspected_fonts": classify["suspected_fonts"],
+            "suspected_artworks": classify["suspected_artworks"],
             "verifications": agent2_result["verifications"],
             "final_verdict": black_box_result["final_verdict"],
             "overall_confidence": black_box_result["overall_confidence"],

@@ -454,3 +454,55 @@ thể lập luận theo hướng "vintage collectible" hợp lý), nhưng đã C
 cụ thể thay vì mặc định — case mass-market rõ ràng (gym_fitness) đã đổi đúng hướng sang Amazon.
 Threshold này là điểm khởi đầu, nên tiếp tục theo dõi tỉ lệ thật khi có nhiều test case đa dạng hơn
 (đúng tinh thần CLAUDE.md mục 9.1 — số khởi điểm, cần tune lại bằng dữ liệu thật).
+
+## 11. `sub_niche` + candidate `fonts`/`artworks` + BLOCKED-không-cần-database mở rộng (2026-08-22)
+
+**`sub_niche`** — trường mới trong output Agent 1, xuất hiện ở MỌI tầng: `Agent1ClassifyResult`/
+`DesignComplianceResult` (schemas.py), `orchestrator.py` return dict, `csv_batch.py`
+`BATCH_OUTPUT_COLUMNS`/`batch_row_to_csv_dict` (cột `sub_niche` ngay sau `niche`), và
+`frontend-react` (`types.ts` + `ResultCard.tsx` meta-grid). Đúng field `expected_sub_niche` đã
+có sẵn trong file mẫu THẬT của BGK (`design_samples_template.xlsx`, xem `csv_batch.py` mục
+`_EXPECTED_COLUMN_ALIASES`) — trước đây field input-side grading đã đọc được nhưng pipeline
+KHÔNG hề sinh ra `sub_niche` thật để so sánh, giờ đã có. `niche_taxonomy.json` bổ sung
+`sub_niches` (list ví dụ) cho từng niche, tiêm vào prompt Agent 1 dạng phẳng — cùng nguyên tắc
+"not exhaustive" như niche/style, Agent 1 KHÔNG bị giới hạn chỉ trong danh sách.
+
+**`suspected_fonts` + `suspected_artworks`** — 2 candidate-category MỚI, cùng pattern hoàn
+chỉnh với logo/character/celebrity: Agent 1 candidate-generate (`_get_text_reference()` tiêm
+nguyên văn `font_watchlist.md`/`artwork_list.md` — đã dịch sang tiếng Anh, đúng nguyên tắc mục
+10) → Agent 2 TASK 1 verify present/absent + reasoning (gộp CHUNG 1 lần gọi LLM với logo/
+character/celebrity, không tốn thêm API call) → `black_box.py::score_font_identity()`/
+`score_artwork_identity()` quyết định verdict. 2 category threshold MỚI: `font_risk`,
+`artwork_similarity` (`{"blocked_min": 85, "risky_min": 60}`).
+
+**Chính sách MỚI, áp dụng ĐỒNG NHẤT cho `logo_similarity`/`character_similarity`/`font_risk`/
+`artwork_similarity`**: trước đây tên KHÔNG có trong danh sách tham chiếu (`logo_refs/
+manifest.json`/`character_list.md`) LUÔN bị `_UNLISTED_NAME_SCORE_CAP` (75) chặn cứng, không
+bao giờ đạt `BLOCKED` được (`character_similarity` blocked_min=88, `logo_similarity`
+blocked_min=82 — 75 luôn ở dưới). Giờ cap CHỈ áp dụng khi Agent 2 KHÔNG xác nhận+giải thích —
+nếu Agent 2 (TASK 1) xác nhận `present=true` KÈM `reasoning` không rỗng, cap được BỎ, cho phép
+đạt `BLOCKED` dù chưa có trong database tham chiếu (`_apply_verification_filter()` gắn
+`_agent2_reasoning` vào entry, `_score_name_cross_reference()` đọc field này để quyết định bỏ
+cap). Đây là chính sách **"LLM có quyền BLOCKED nếu nghi ngờ cao và giải thích được kĩ, dù chưa
+có database"** — mirror đúng `score_trademark_text_llm_sense()` đã có từ trước, giờ mở rộng
+sang cả logo/character/font/artwork. `font_risk`/`artwork_similarity` không có `ref_names` thật
+(2 file .md nguồn là prose, không phải name list sạch) nên LUÔN coi là "unlisted" — verdict phụ
+thuộc HOÀN TOÀN vào cơ chế reasoning này (không Agent 2 xác nhận -> tối đa `RISKY`, "nên kiểm
+tra qua"; có xác nhận đủ thuyết phục -> có thể `BLOCKED`).
+
+Verify THẬT end-to-end (API key thật, `Gen.G-banner.jpg` — banner có nhiều logo tài trợ thật):
+```
+suspected_logos: LG UltraGear (high), Monster Energy (high), Logitech G (high), ...
+suspected_fonts: "bold italic sans-serif (esports/gaming style)" (medium), "geometric sans-serif" (low)
+suspected_artworks: "League of Legends LCH 2025 Championship official key art..." (high)
+
+→ Agent 2 xác nhận present=true CHO CẢ 5 mục, kèm reasoning chi tiết
+→ evidence:
+   logo_similarity: BLOCKED (92) — "CHƯA có trong danh sách đối chiếu — Agent 2 tự xác nhận: ... khuyến nghị kiểm chứng thủ công"
+   font_risk: RISKY (72) — confidence gốc "medium" nên KHÔNG đủ vượt blocked_min=85 dù đã bỏ cap (đúng thiết kế — bỏ cap không tự động BLOCKED, vẫn phụ thuộc confidence thật)
+   artwork_similarity: BLOCKED (92) — confidence gốc "high" + reasoning chi tiết
+final_verdict: BLOCKED, reasoning + fix_suggestions (Agent 3) tự động bao phủ ĐỦ 4 category (kể cả 2 category mới, không cần sửa gì Agent 3 — evidence dict generic)
+```
+Xác nhận: bỏ cap KHÔNG đồng nghĩa tự động BLOCKED — vẫn phụ thuộc confidence gốc (low/medium/high)
+của Agent 1 + Agent 2 xác nhận, đúng tinh thần "Python quyết định số/threshold cứng" (CLAUDE.md
+mục 10), chỉ LOẠI BỎ giới hạn nhân tạo trước đây (KHÔNG BAO GIỜ được BLOCKED nếu unlisted).

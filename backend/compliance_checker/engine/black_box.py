@@ -25,6 +25,16 @@ CATEGORY_THRESHOLDS = {
     # _NAME_CONFIDENCE_SCORE (high=92/medium=72/low=45) như logo/character/celebrity. Match
     # database THẬT (score_trademark_text() ở trên, KHÔNG đổi) vẫn nhị phân riêng như cũ,
     # KHÔNG dùng bảng này — 2 nguồn gộp qua _combine_category_results (xem run_black_box()).
+    "font_risk":            {"blocked_min": 85, "risky_min": 60},   # (2026-08-22) MỚI — xem
+    "artwork_similarity":   {"blocked_min": 85, "risky_min": 60},   # score_font_identity()/
+    # score_artwork_identity() bên dưới. Cả 2 category KHÔNG có ref_names thật (font_watchlist.md/
+    # artwork_list.md là prose, không phải name list — xem agents.py::_get_text_reference), nên
+    # _UNLISTED_NAME_SCORE_CAP (75) LUÔN áp dụng trừ khi Agent 2 đã xác nhận+giải thích — nghĩa
+    # là suspicion đơn thuần từ Agent 1 (không Agent 2 xác nhận) tối đa dừng ở RISKY (75 nằm
+    # giữa risky_min 60 và blocked_min 85), CHỈ đạt BLOCKED khi Agent 2 tự tin xác nhận + giải
+    # thích kĩ (xem _score_name_cross_reference — chính sách chung áp dụng đồng nhất cho logo/
+    # character/font/artwork: "LLM có quyền BLOCKED nếu nghi ngờ cao và giải thích được, dù
+    # chưa có database").
 }
 
 _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE = 95.0
@@ -172,11 +182,21 @@ def _load_reference_names(filename: str) -> set:
 
 
 def _score_name_cross_reference(entries: list, ref_names: set, category: str) -> dict:
-    """Dùng chung cho score_character_identity/score_celebrity_likeness: Agent 2 (Vision) tự
-    do nêu tên nghi ngờ (không giới hạn danh sách, đúng CLAUDE.md mục 2.2) -> Python đối
-    chiếu case-insensitive với danh sách tham chiếu. Đây là tín hiệu DUY NHẤT ảnh hưởng verdict
-    cho category character_similarity/celebrity_likeness cho tới khi opencv_modules.match_character
-    (hiện là placeholder, xem opencv_modules.py) có thuật toán thật."""
+    """Dùng chung cho score_character_identity/score_celebrity_likeness/score_logo_identity/
+    score_font_identity/score_artwork_identity: Agent 2 (Vision) tự do nêu tên nghi ngờ (không
+    giới hạn danh sách, đúng CLAUDE.md mục 2.2) -> Python đối chiếu case-insensitive với danh
+    sách tham chiếu. Đây là tín hiệu DUY NHẤT ảnh hưởng verdict cho các category identity-based
+    này cho tới khi opencv_modules.match_character/match_logo (hiện là placeholder) có thuật
+    toán thật.
+
+    ⚠️ (2026-08-22) THAY ĐỔI CHÍNH SÁCH: trước đây tên KHÔNG có trong danh sách tham chiếu LUÔN
+    bị cap ở _UNLISTED_NAME_SCORE_CAP (chặn cứng, không bao giờ BLOCKED được). Giờ CAP CHỈ áp
+    dụng khi KHÔNG có "_agent2_reasoning" đính kèm (item['_agent2_reasoning'], do
+    _apply_verification_filter() gắn vào từ Agent 2 TASK 1 khi present=true kèm giải thích) —
+    nếu CÓ, bỏ cap, cho phép đạt BLOCKED dù chưa có trong database tham chiếu. Quyết định rõ
+    ràng của nhóm: "LLM có quyền BLOCKED nếu nghi ngờ cao và giải thích được kĩ, dù không có
+    database" — mirror hệt score_trademark_text_llm_sense(). Chưa có reasoning (Agent 2 chưa
+    chạy/lỗi/không present) -> GIỮ cap cũ, vẫn RISKY tối đa ("nên kiểm tra qua" thay vì tự BLOCKED)."""
     if not entries:
         return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
 
@@ -187,19 +207,28 @@ def _score_name_cross_reference(entries: list, ref_names: set, category: str) ->
             continue
         conf_label = (item or {}).get("confidence", "low")
         listed = name.lower() in ref_names
+        agent2_reasoning = str((item or {}).get("_agent2_reasoning", "") or "").strip()
         raw = _NAME_CONFIDENCE_SCORE.get(conf_label, 45)
-        if not listed:
+        if not listed and not agent2_reasoning:
             raw = min(raw, _UNLISTED_NAME_SCORE_CAP)
         if best is None or raw > best["raw"]:
-            best = {"raw": raw, "name": name, "listed": listed}
+            best = {"raw": raw, "name": name, "listed": listed, "reasoning": agent2_reasoning}
 
     if best is None:
         return {"tag": "SAFE", "confidence": _DEFAULT_CONFIDENCE_WHEN_ALL_SAFE, "detail": ""}
 
     result = _score_numeric_category(category, best["raw"])
     if result["tag"] != "SAFE":
-        listed_note = "có trong danh sách đối chiếu" if best["listed"] else "CHƯA có trong danh sách đối chiếu, cần review thủ công"
-        result["detail"] = f"Nghi ngờ '{best['name']}' ({listed_note})"
+        if best["listed"]:
+            result["detail"] = f"Nghi ngờ '{best['name']}' (có trong danh sách đối chiếu)"
+        elif best["reasoning"]:
+            result["detail"] = (
+                f"Nghi ngờ '{best['name']}' (CHƯA có trong danh sách đối chiếu — Agent 2 tự xác nhận: "
+                f"{best['reasoning']} — khuyến nghị kiểm chứng thủ công vì đây là phán đoán AI, "
+                f"không phải kết quả database đã xác minh)"
+            )
+        else:
+            result["detail"] = f"Nghi ngờ '{best['name']}' (CHƯA có trong danh sách đối chiếu, cần review thủ công)"
     return result
 
 
@@ -222,24 +251,42 @@ def _load_manifest_brand_names() -> set:
 
 
 def _apply_verification_filter(entries: list, verifications: "list | None", category: str, name_key: str) -> list:
-    """(2026-08-21) Lọc entries (suspected_logos/characters/celebrities từ Agent 1) theo kết quả
-    Agent 2 verify — Agent 2 giờ KHÔNG tự detect nữa, chỉ trả lời CÓ/KHÔNG cho từng candidate
-    Agent 1 đã nêu (xem agents.py::run_agent2_verify_candidates). Loại bỏ mục Agent 2 xác nhận
-    present=False (Agent 1 đoán nhầm, không thật sự có trong ảnh) TRƯỚC khi đối chiếu danh sách
-    tham chiếu — giảm false positive từ việc Agent 1 cố tình đoán rộng tay (top 5, kể cả không
-    chắc). Mục KHÔNG có verification tương ứng (Agent 2 lỗi/không gọi, hoặc tên không khớp do
-    model diễn đạt khác) -> GIỮ NGUYÊN, fail-open, không mất evidence vì lỗi hạ tầng/parse
-    (CLAUDE.md mục 10)."""
+    """(2026-08-21) Lọc entries (suspected_logos/characters/celebrities/fonts/artworks từ Agent 1)
+    theo kết quả Agent 2 verify — Agent 2 giờ KHÔNG tự detect nữa, chỉ trả lời CÓ/KHÔNG cho từng
+    candidate Agent 1 đã nêu (xem agents.py::run_agent2_verify_candidates). Loại bỏ mục Agent 2
+    xác nhận present=False (Agent 1 đoán nhầm, không thật sự có trong ảnh) TRƯỚC khi đối chiếu
+    danh sách tham chiếu — giảm false positive từ việc Agent 1 cố tình đoán rộng tay (top 5, kể
+    cả không chắc). Mục KHÔNG có verification tương ứng (Agent 2 lỗi/không gọi, hoặc tên không
+    khớp do model diễn đạt khác) -> GIỮ NGUYÊN, fail-open, không mất evidence vì lỗi hạ tầng/parse
+    (CLAUDE.md mục 10).
+
+    ⚠️ (2026-08-22, MỚI) GẮN KÈM "_agent2_reasoning" vào entry nếu Agent 2 xác nhận present=true
+    KÈM reasoning không rỗng — _score_name_cross_reference() dùng field này để quyết định có bỏ
+    cap "chưa có trong database" hay không (chính sách mới: LLM có quyền BLOCKED nếu giải thích
+    được kĩ, dù chưa có database — xem _score_name_cross_reference)."""
     if not verifications:
         return entries
-    not_present = {
-        v["name"].strip().lower()
-        for v in verifications
-        if v.get("category") == category and v.get("present") is False and v.get("name")
-    }
-    if not not_present:
+    not_present: set = set()
+    reasoning_by_name: dict = {}
+    for v in verifications:
+        if v.get("category") != category or not v.get("name"):
+            continue
+        name_l = v["name"].strip().lower()
+        if v.get("present") is False:
+            not_present.add(name_l)
+        elif v.get("present") is True and str(v.get("reasoning", "")).strip():
+            reasoning_by_name[name_l] = str(v["reasoning"]).strip()
+    if not not_present and not reasoning_by_name:
         return entries
-    return [e for e in entries if str(e.get(name_key, "")).strip().lower() not in not_present]
+    out = []
+    for e in entries:
+        name_l = str(e.get(name_key, "")).strip().lower()
+        if name_l in not_present:
+            continue
+        if name_l in reasoning_by_name:
+            e = {**e, "_agent2_reasoning": reasoning_by_name[name_l]}
+        out.append(e)
+    return out
 
 
 def score_logo_identity(suspected_logos: list) -> dict:
@@ -251,7 +298,10 @@ def score_logo_identity(suspected_logos: list) -> dict:
     verdict vẫn ra SAFE — phát hiện thật qua test ảnh banner Gen.G, 3 logo "high" vẫn SAFE).
     Field input là {"brand_name": str, "confidence": "low"|"medium"|"high"} (List[SuspectedLogo]).
     """
-    entries = [{"name": item.get("brand_name", ""), "confidence": item.get("confidence", "low")} for item in (suspected_logos or [])]
+    entries = [
+        {"name": item.get("brand_name", ""), "confidence": item.get("confidence", "low"), "_agent2_reasoning": item.get("_agent2_reasoning", "")}
+        for item in (suspected_logos or [])
+    ]
     return _score_name_cross_reference(entries, _load_manifest_brand_names(), "logo_similarity")
 
 
@@ -264,6 +314,32 @@ def score_celebrity_likeness(suspected_celebrities: list) -> dict:
     """Cross-reference suspected_celebrities (Agent 1) với celebrity_list.md. KHÔNG dùng
     face-recognition/biometric — chỉ đối chiếu TÊN (CLAUDE.md mục 2.2)."""
     return _score_name_cross_reference(suspected_celebrities, _load_reference_names("celebrity_list.md"), "celebrity_likeness")
+
+
+def score_font_identity(suspected_fonts: list) -> dict:
+    """
+    (2026-08-22, MỚI) Cùng pattern score_logo_identity/score_character_identity — nhưng
+    font_watchlist.md là PROSE (không phải name list sạch để parse, xem agents.py::
+    _get_text_reference), nên KHÔNG có ref_names thật -> mọi suspected_fonts coi như "unlisted"
+    (ref_names=set() rỗng). Verdict phụ thuộc HOÀN TOÀN vào cơ chế "_agent2_reasoning" trong
+    _score_name_cross_reference(): không có Agent 2 xác nhận+giải thích -> tối đa RISKY (khuyến
+    nghị kiểm tra qua); có -> có thể BLOCKED nếu đủ thuyết phục.
+    """
+    entries = [
+        {"name": item.get("font_name_guess", ""), "confidence": item.get("confidence", "low"), "_agent2_reasoning": item.get("_agent2_reasoning", "")}
+        for item in (suspected_fonts or [])
+    ]
+    return _score_name_cross_reference(entries, set(), "font_risk")
+
+
+def score_artwork_identity(suspected_artworks: list) -> dict:
+    """(2026-08-22, MỚI) Tương tự score_font_identity — artwork_list.md cũng là prose, không có
+    ref_names thật để đối chiếu. Verdict phụ thuộc hoàn toàn vào Agent 2 xác nhận + giải thích."""
+    entries = [
+        {"name": item.get("artwork_name", ""), "confidence": item.get("confidence", "low"), "_agent2_reasoning": item.get("_agent2_reasoning", "")}
+        for item in (suspected_artworks or [])
+    ]
+    return _score_name_cross_reference(entries, set(), "artwork_similarity")
 
 
 def score_celebrity_likeness_from_faces(face_identifications: "list | None") -> dict:
@@ -432,6 +508,8 @@ def run_black_box(
     agent2_verifications: "list | None" = None,
     face_identifications: "list | None" = None,
     text_trademark_flags: "list | None" = None,
+    suspected_fonts: "list | None" = None,
+    suspected_artworks: "list | None" = None,
 ) -> dict:
     """
     Điểm vào duy nhất orchestrator.py cần gọi — gói gọn toàn bộ black box thành 1 hàm.
@@ -464,6 +542,12 @@ def run_black_box(
     trademark_text, gộp với score_trademark_text(trademark_flags) (database THẬT, không đổi)
     qua _combine_category_results — high suspicion CÓ THỂ tự BLOCKED dù không match database
     nào (quyết định rõ ràng của nhóm, xem score_trademark_text_llm_sense()).
+
+    suspected_fonts/suspected_artworks: (2026-08-22, MỚI) output Agent 1 (agents.py::
+    run_agent1_classify) — cùng pattern candidate-generation + verify với suspected_logos/
+    characters/celebrities. Lọc qua agent2_verifications (category "font"/"artwork") trước khi
+    score (xem score_font_identity/score_artwork_identity) — cùng chính sách "BLOCKED nếu Agent 2
+    xác nhận + giải thích được kĩ, dù chưa có trong reference list" áp dụng cho logo/character.
     """
     suspected_characters = _apply_verification_filter(suspected_characters or [], agent2_verifications, "character", "name")
     suspected_celebrities = _apply_verification_filter(suspected_celebrities or [], agent2_verifications, "celebrity", "name")
@@ -488,12 +572,23 @@ def run_black_box(
     if text_trademark_flags:
         trademark_score = _combine_category_results(trademark_score, score_trademark_text_llm_sense(text_trademark_flags))
 
+    # (2026-08-22, MỚI) font/artwork — cùng pattern filter-rồi-score với logo/character ở trên.
+    suspected_fonts = _apply_verification_filter(suspected_fonts or [], agent2_verifications, "font", "font_name_guess")
+    suspected_artworks = _apply_verification_filter(suspected_artworks or [], agent2_verifications, "artwork", "artwork_name")
+    font_score = score_font_identity(suspected_fonts) if suspected_fonts else None
+    artwork_score = score_artwork_identity(suspected_artworks) if suspected_artworks else None
+
     category_results = {
         "character_similarity": character_score,
         "logo_similarity": logo_score,
         "trademark_text": trademark_score,
         content_safety_key: content_safety_result,
     }
+    if font_score:
+        category_results["font_risk"] = font_score
+    if artwork_score:
+        category_results["artwork_similarity"] = artwork_score
+
     celebrity_score = score_celebrity_likeness(suspected_celebrities) if suspected_celebrities else None
     face_score = score_celebrity_likeness_from_faces(face_identifications) if face_identifications else None
     if celebrity_score and face_score:

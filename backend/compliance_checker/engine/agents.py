@@ -205,15 +205,37 @@ def _get_logo_brand_names() -> list[str]:
     return [b["brand_name"] for b in manifest.get("brands", [])]
 
 
+def _get_text_reference(filename: str) -> str:
+    """Đọc nguyên văn 1 file .md trong data/ để tiêm vào prompt dạng prose (giống cách Agent 4
+    tiêm policy_blocks) — dùng cho font_watchlist.md/artwork_list.md (2026-08-22, MỚI): 2 file
+    này là prose, KHÔNG có cấu trúc tên sạch để Python parse như character_list.md/
+    celebrity_list.md, nên tiêm nguyên văn để LLM tự đọc hiểu ngữ cảnh/ví dụ, không cố parse
+    thành list tên. Fallback rỗng, không raise (đúng nguyên tắc chung mọi loader trong module)."""
+    path = os.path.join(_DATA_DIR, filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
 # =====================================================================
 # AGENT 1 — CLASSIFY (Vision, có ảnh)
 # =====================================================================
 
-def _build_agent1_prompt(niche_taxonomy: dict, brand_names: list[str]) -> tuple[str, str]:
+def _build_agent1_prompt(
+    niche_taxonomy: dict, brand_names: list[str], font_reference: str = "", artwork_reference: str = ""
+) -> tuple[str, str]:
     niches_text = ", ".join(n["slug"] for n in niche_taxonomy.get("niches", []))
     styles_text = ", ".join(s["slug"] for s in niche_taxonomy.get("styles", []))
     motifs_text = ", ".join(niche_taxonomy.get("global_dangerous_motifs", {}).get("motifs", []))
     brands_text = ", ".join(brand_names) if brand_names else "(chưa có danh sách brand tham chiếu)"
+    # sub_niches: gộp phẳng ví dụ của MỌI niche thành 1 list tham khảo — Agent 1 tự chọn cái
+    # khớp nhất với niche đã detect, KHÔNG bắt buộc đúng niche đang chọn phải khớp 1-1 với
+    # sub_niche (vd niche lạ ngoài taxonomy vẫn được tự do đề xuất sub_niche tương ứng).
+    sub_niches_text = ", ".join(
+        sn for n in niche_taxonomy.get("niches", []) for sn in n.get("sub_niches", [])
+    ) or "(chưa có danh sách sub_niche tham khảo)"
 
     system_prompt = f"""You are a Senior IP Compliance Vision Analyst for a Print-on-Demand marketplace.
 Analyze the uploaded design image and classify it — you are NOT limited to the reference lists below, always classify freely even for niches/styles outside them.
@@ -221,44 +243,64 @@ Analyze the uploaded design image and classify it — you are NOT limited to the
 📌 If MULTIPLE images are provided (marked "--- Page N/M ---", i.e. pages of a multi-page PDF/document), treat them as ONE single design submission — analyze ALL pages together and consolidate everything (OCR_text, motifs, suspected_logos) into ONE JSON response covering the whole document, do NOT answer per page.
 
 📌 REFERENCE NICHE LIST (not exhaustive, use if it fits, otherwise propose your own): {niches_text}
+📌 REFERENCE SUB-NICHE EXAMPLES (not exhaustive, illustrative only — pick/propose whatever actually fits the niche above): {sub_niches_text}
 📌 REFERENCE STYLE LIST (not exhaustive): {styles_text}
 📌 UNIVERSAL DANGEROUS MOTIFS to always scan for regardless of niche: {motifs_text}
 📌 KNOWN BRAND NAMES to check against (or any other famous brand you recognize outside this list): {brands_text}
+📌 FONT-RISK REFERENCE (background context — commercial fonts commonly used without a license in POD, NOT an exhaustive/confirmable list):
+{font_reference or "(no font reference on file)"}
+📌 ARTWORK-RISK REFERENCE (background context — commonly copyrighted artwork/franchises, NOT an exhaustive/confirmable list):
+{artwork_reference or "(no artwork reference on file)"}
 
 TASK:
 1. `niche`: the main niche/theme of this design.
-2. `style`: the visual style.
-3. `motifs`: list of sub-themes/motifs detected, including ANY of the universal dangerous motifs above if present.
-4. `OCR_text`: transcribe ALL visible text in the image, verbatim, in its original language.
-5. `suspected_logos`: TOP 5 suspected brand logos (fewer if genuinely fewer plausible candidates), each with "brand_name" and "confidence" ("low"/"medium"/"high").
-6. `suspected_characters`: TOP 5 suspected copyrighted cartoon/comic/anime characters (fewer if fewer candidates), each with "name" and "confidence" — list EVERY suspicion even if uncertain, do NOT self-filter.
-7. `suspected_celebrities`: TOP 5 suspected real-world celebrities/athletes/politicians (fewer if fewer candidates), each with "name" and "confidence" — judge ONLY from visible cues (a printed name, a highly iconic/unmistakable likeness); when unsure, still list with "low" confidence rather than omitting.
+2. `sub_niche`: a more specific sub-category within that niche (e.g. niche="christmas_holiday" -> sub_niche="ugly_christmas_sweater"). Propose your own if nothing in the reference examples fits.
+3. `style`: the visual style.
+4. `motifs`: list of sub-themes/motifs detected, including ANY of the universal dangerous motifs above if present.
+5. `OCR_text`: transcribe ALL visible text in the image, verbatim, in its original language.
+6. `suspected_logos`: TOP 5 suspected brand logos (fewer if genuinely fewer plausible candidates), each with "brand_name" and "confidence" ("low"/"medium"/"high").
+7. `suspected_characters`: TOP 5 suspected copyrighted cartoon/comic/anime characters (fewer if fewer candidates), each with "name" and "confidence" — list EVERY suspicion even if uncertain, do NOT self-filter.
+8. `suspected_celebrities`: TOP 5 suspected real-world celebrities/athletes/politicians (fewer if fewer candidates), each with "name" and "confidence" — judge ONLY from visible cues (a printed name, a highly iconic/unmistakable likeness); when unsure, still list with "low" confidence rather than omitting.
+9. `suspected_fonts`: TOP 5 suspected commercial/branded fonts used in the design (fewer if fewer candidates), each with "font_name_guess" (a specific font name ONLY if highly distinctive, otherwise a general style description like "bold condensed sans-serif") and "confidence".
+10. `suspected_artworks`: TOP 5 suspected copyrighted artworks/illustrations/franchise key-art the design may be reproducing or closely deriving from (fewer if fewer candidates), each with "artwork_name" (the specific work/franchise, e.g. "Studio Ghibli movie poster style") and "confidence".
 
-📌 All 3 lists above are a broad CANDIDATE-GENERATION pass only — a downstream Agent will look at the image again and verify each candidate one by one. So err on the side of listing a plausible guess rather than omitting it; being wrong here is cheap, omitting a real violation is not.
+📌 All 5 candidate lists above (logos/characters/celebrities/fonts/artworks) are a broad CANDIDATE-GENERATION pass only — a downstream Agent will look at the image again and verify each candidate one by one. So err on the side of listing a plausible guess rather than omitting it; being wrong here is cheap, omitting a real violation is not.
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, no text outside it, exact keys only.
 
 REQUIRED JSON SHAPE (fill in real values):
 {{
   "niche": "christmas_holiday",
+  "sub_niche": "ugly_christmas_sweater",
   "style": "vintage_retro",
   "motifs": ["motif1"],
   "OCR_text": "exact text seen in the image, or empty string if none",
   "suspected_logos": [{{"brand_name": "nike", "confidence": "medium"}}],
   "suspected_characters": [{{"name": "Mickey Mouse", "confidence": "high"}}],
-  "suspected_celebrities": [{{"name": "Taylor Swift", "confidence": "low"}}]
+  "suspected_celebrities": [{{"name": "Taylor Swift", "confidence": "low"}}],
+  "suspected_fonts": [{{"font_name_guess": "bold condensed sans-serif", "confidence": "low"}}],
+  "suspected_artworks": [{{"artwork_name": "Studio Ghibli movie poster style", "confidence": "medium"}}]
 }}"""
     user_prompt = "Classify this design image per the instructions above."
     return system_prompt, user_prompt
 
 
-def run_agent1_classify(image_base64: "str | list[str]", niche_taxonomy: "dict | None" = None, brand_names: "list[str] | None" = None) -> dict:
+def run_agent1_classify(
+    image_base64: "str | list[str]",
+    niche_taxonomy: "dict | None" = None,
+    brand_names: "list[str] | None" = None,
+    font_reference: "str | None" = None,
+    artwork_reference: "str | None" = None,
+) -> dict:
     niche_taxonomy = niche_taxonomy if niche_taxonomy is not None else _get_niche_taxonomy()
     brand_names = brand_names if brand_names is not None else _get_logo_brand_names()
-    system_prompt, user_prompt = _build_agent1_prompt(niche_taxonomy, brand_names)
+    font_reference = font_reference if font_reference is not None else _get_text_reference("font_watchlist.md")
+    artwork_reference = artwork_reference if artwork_reference is not None else _get_text_reference("artwork_list.md")
+    system_prompt, user_prompt = _build_agent1_prompt(niche_taxonomy, brand_names, font_reference, artwork_reference)
     raw = _call_llm_json(system_prompt, user_prompt, image_base64=image_base64, temperature=0.2)
 
     niche = str(raw.get("niche") or "unknown")
+    sub_niche = str(raw.get("sub_niche") or "")
     style = str(raw.get("style") or "unknown")
     motifs = raw.get("motifs") if isinstance(raw.get("motifs"), list) else []
     ocr_text = str(raw.get("OCR_text") or "")
@@ -278,18 +320,27 @@ def run_agent1_classify(image_base64: "str | list[str]", niche_taxonomy: "dict |
     # run_agent2_verify_candidates bên dưới). KHÔNG tự lọc "low" ở đây (khác suspected_logos)
     # — giữ nguyên policy cũ của Agent 2: để bước cross-reference + verify quyết định, tự lọc
     # sớm ở đây dễ bỏ sót false negative hơn (character/celeb khó nhận diện hơn logo nhiều).
-    clean_names = lambda lst: [
-        {"name": str(i.get("name", "")).strip(), "confidence": i.get("confidence", "low")}
-        for i in lst if isinstance(i, dict) and str(i.get("name", "")).strip()
-    ][:5]
+    # (2026-08-22) suspected_fonts/suspected_artworks dùng CHUNG helper này — cùng lý do KHÔNG
+    # tự lọc sớm (font/artwork khó nhận diện chắc chắn hơn cả character/celeb, tự lọc sớm dễ
+    # mất evidence thật trước khi Agent 2 kịp verify).
+    def _clean_items(lst, key: str) -> list:
+        return [
+            {key: str(i.get(key, "")).strip(), "confidence": i.get("confidence", "low")}
+            for i in lst if isinstance(i, dict) and str(i.get(key, "")).strip()
+        ][:5]
+
     raw_chars = raw.get("suspected_characters") if isinstance(raw.get("suspected_characters"), list) else []
     raw_celebs = raw.get("suspected_celebrities") if isinstance(raw.get("suspected_celebrities"), list) else []
+    raw_fonts = raw.get("suspected_fonts") if isinstance(raw.get("suspected_fonts"), list) else []
+    raw_artworks = raw.get("suspected_artworks") if isinstance(raw.get("suspected_artworks"), list) else []
 
     return {
-        "niche": niche, "style": style, "motifs": [str(m) for m in motifs],
+        "niche": niche, "sub_niche": sub_niche, "style": style, "motifs": [str(m) for m in motifs],
         "OCR_text": ocr_text, "suspected_logos": suspected_logos,
-        "suspected_characters": clean_names(raw_chars),
-        "suspected_celebrities": clean_names(raw_celebs),
+        "suspected_characters": _clean_items(raw_chars, "name"),
+        "suspected_celebrities": _clean_items(raw_celebs, "name"),
+        "suspected_fonts": _clean_items(raw_fonts, "font_name_guess"),
+        "suspected_artworks": _clean_items(raw_artworks, "artwork_name"),
         "text_source": "vision_ocr",
     }
 
@@ -318,6 +369,14 @@ def _build_agent2_prompt(candidates: dict, num_face_crops: int, ocr_text: "str |
         name = str(item.get("name", "")).strip()
         if name:
             lines.append(f'- category="celebrity", name="{name}"')
+    for item in candidates.get("fonts", []) or []:
+        name = str(item.get("font_name_guess", "")).strip()
+        if name:
+            lines.append(f'- category="font", name="{name}"')
+    for item in candidates.get("artworks", []) or []:
+        name = str(item.get("artwork_name", "")).strip()
+        if name:
+            lines.append(f'- category="artwork", name="{name}"')
     candidates_text = "\n".join(lines) if lines else "(no candidates)"
 
     verify_task = ""
@@ -326,11 +385,20 @@ def _build_agent2_prompt(candidates: dict, num_face_crops: int, ocr_text: "str |
         verify_task = f"""
 TASK 1 — VERIFY CANDIDATES: A prior detector (Agent 1) examined the design image(s) above and
 produced a list of CANDIDATE items it suspects might be present — logos, copyrighted characters,
-celebrities. Your job is to look at the design image(s) carefully and verify, for EACH candidate
-below, whether it is ACTUALLY visibly present or not.
+celebrities, fonts, and artworks/illustrations. Your job is to look at the design image(s)
+carefully and verify, for EACH candidate below, whether it is ACTUALLY visibly present or not.
 
 🚨 This is a VERIFICATION pass, NOT a fresh detection pass — do NOT add any item that is not in
 the candidate list below, even if you notice something else. Only judge the exact items given.
+
+🚨 IMPORTANT — your reasoning carries real weight downstream: for any candidate you confirm
+"present": true, a separate deterministic check will try to cross-reference the name against our
+internal reference lists — but many real logos/characters/fonts/artworks are NOT in those lists
+yet. If you are genuinely confident this is a real, recognizable IP violation (not just "it's
+technically there"), your "reasoning" MUST clearly explain WHY (what it resembles, what makes you
+confident) — a detailed, well-justified "reasoning" here CAN be enough on its own to get the
+design BLOCKED even with zero match in our reference lists (same policy as the trademark-text
+sense-check below). A vague reasoning like "it's visible" is NOT enough for that — be specific.
 
 📌 CANDIDATES TO VERIFY:
 {candidates_text}
@@ -440,8 +508,10 @@ def run_agent2_verify_candidates(
 ) -> dict:
     """
     candidates: {"logos": [{"brand_name","confidence"}], "characters": [{"name","confidence"}],
-    "celebrities": [{"name","confidence"}]} — lấy trực tiếp từ suspected_logos/suspected_characters/
-    suspected_celebrities của run_agent1_classify().
+    "celebrities": [{"name","confidence"}], "fonts": [{"font_name_guess","confidence"}],
+    "artworks": [{"artwork_name","confidence"}]} — lấy trực tiếp từ suspected_logos/
+    suspected_characters/suspected_celebrities/suspected_fonts/suspected_artworks của
+    run_agent1_classify() (2 field cuối MỚI thêm 2026-08-22, cùng pattern candidate-generation).
 
     face_crops: (2026-08-21) output opencv_modules.detect_and_crop_faces()["faces"] —
     [{"face_base64","bbox_norm","detection_score"}, ...]. Model BlazeFace CHỈ detect vị trí mặt,
@@ -462,7 +532,7 @@ def run_agent2_verify_candidates(
     candidates = candidates or {}
     face_crops = face_crops or []
     ocr_text = ocr_text or ""
-    has_candidates = any(candidates.get(k) for k in ("logos", "characters", "celebrities"))
+    has_candidates = any(candidates.get(k) for k in ("logos", "characters", "celebrities", "fonts", "artworks"))
     if not has_candidates and not face_crops and not ocr_text.strip():
         return {"verifications": [], "face_identifications": [], "text_trademark_flags": []}
 
@@ -491,7 +561,7 @@ def run_agent2_verify_candidates(
             continue
         name = str(item.get("name", "")).strip()
         category = item.get("category")
-        if not name or category not in ("logo", "character", "celebrity"):
+        if not name or category not in ("logo", "character", "celebrity", "font", "artwork"):
             continue
         clean_verifications.append({
             "category": category,
