@@ -293,8 +293,7 @@ async def process_one_design(
         trademark_flags = _safe_or_default(trademark_flags, [], "trademark_resolver", warnings)
         market = _safe_or_default(
             market,
-            {"top_country_suggestion": "", "top_platform_suggestion": "", "rationale": "",
-             "selected_platform_suitable": None, "selected_platform_rationale": ""},
+            {"top_country_suggestion": "", "top_platform_suggestion": "", "rationale": ""},
             "Agent 4", warnings
         )
 
@@ -332,10 +331,22 @@ async def process_one_design(
             "logo_match": logo_match, "char_match": char_match,
             "trademark_flags": trademark_flags,
         }
+        # platform/target_country truyền vào ĐÂY (không phải Agent 4 nữa) để TASK C
+        # (selected_platform_suitable) có verdict/evidence thật khi thẩm định — xem ghi chú
+        # đầy đủ trong agents.py::run_agent4_market_suggestion + run_synthesis_and_reasoning.
         synthesis_result = await asyncio.to_thread(
             cc_agents.run_synthesis_and_reasoning, vision_images, evidence_bundle, black_box_result,
             pdf_meta.get("text_blocks_with_bbox") if pdf_meta else None,
+            platform, target_country,
         )
+        # market_suggestion cuối = gộp gợi ý ĐỘC LẬP (Agent 4, verdict-blind, chạy song song) +
+        # thẩm định platform ĐÃ CHỌN (từ synthesis_result, verdict-aware, chạy sau black box) —
+        # shape cuối GIỮ NGUYÊN y hệt Agent4Result cũ (schemas.py không cần đổi gì).
+        market = {
+            **market,
+            "selected_platform_suitable": synthesis_result["selected_platform_suitable"],
+            "selected_platform_rationale": synthesis_result["selected_platform_rationale"],
+        }
 
         # flagged_regions: khoanh vùng THẬT (Python, KHÔNG LLM đoán toạ độ) cho cả text lẫn mặt
         # đáng nghi — thay thế hoàn toàn cách hiện thumbnail crop riêng trước đây.

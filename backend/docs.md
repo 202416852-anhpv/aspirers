@@ -552,3 +552,39 @@ Verify thật: prompt Agent 1 dry-run xác nhận đủ `music_fan` + ví dụ `
 system_prompt; test end-to-end (Gen.G banner) cho `style: "photographic"` — khớp ĐÚNG style đơn
 kiểu BGK thay vì slug ghép tự nghĩ trước đây (`photographic_professional`), xác nhận taxonomy
 mới đang thật sự ảnh hưởng lựa chọn của Vision.
+
+## 13. `selected_platform_suitable` chuyển sang chạy SAU verdict — sửa lỗ hổng "mù verdict" (2026-08-22)
+
+**Phát hiện qua rà 3 ảnh chụp thật của file mẫu BGK** (không phải data đưa vào database, chỉ để
+hiểu pattern): cột `platform` trong file mẫu gán CÙNG 1 niche (vd "Music Fan") lên CẢ 3 platform
+khác nhau ở các dòng khác nhau (Etsy/Amazon Merch/TikTok Shop, gần như đều nhau) — nghĩa là cột
+này KHÔNG phải "platform đúng nhất cho niche này", mà là "platform hypothetical đang test", và
+gần như MỌI design có yếu tố IP thật (logo/celeb/album cover/band name thật) đều `BLOCKED` bất
+kể platform nào. Điều này lộ ra lỗ hổng thật trong kiến trúc cũ: `run_agent4_market_suggestion()`
+(trả `selected_platform_suitable`) chạy SONG SONG với Agent 2/OpenCV/trademark — TRƯỚC khi
+black box quyết định verdict — nên KHÔNG THỂ biết design có vi phạm thật hay không khi trả lời
+câu "platform user chọn có phù hợp không", dễ trả lời chung chung/né tránh.
+
+**Đã sửa**: `selected_platform_suitable`/`selected_platform_rationale` CHUYỂN từ
+`run_agent4_market_suggestion()` (Agent 4, verdict-blind, chạy song song) sang
+`run_synthesis_and_reasoning()` (chạy SAU black box, đã có sẵn verdict+evidence — không tốn
+thêm round-trip LLM nào, tận dụng đúng call đã tồn tại). Agent 4 giờ CHỈ còn 1 việc: gợi ý ĐỘC
+LẬP `top_country_suggestion`/`top_platform_suggestion`/`rationale` dựa trên niche/style (không
+đổi câu hỏi này). `schemas.py` KHÔNG đổi gì — `Agent4Result` giữ nguyên đủ 5 field, orchestrator.py
+chỉ gộp kết quả từ 2 nguồn thay vì 1. TASK C (mới) chỉ thị RÕ: nếu verdict BLOCKED vì yếu tố IP
+thật rõ ràng, phải nói THẲNG `false` + giải thích đây là vấn đề NỘI DUNG (sẽ bị từ chối ở MỌI
+platform), không phải vấn đề chọn sai platform — không được né tránh/mập mờ.
+
+Verify thật (`Gen.G-banner.jpg`, `platform="etsy"`, verdict thật = BLOCKED do logo tài trợ thật):
+```
+top_platform_suggestion: "etsy"  (gợi ý độc lập theo niche/style — KHÔNG đổi, vẫn hợp lý)
+selected_platform_suitable: false
+selected_platform_rationale: "Thiết kế này KHÔNG phù hợp với Etsy (hoặc bất kỳ nền tảng nào
+  khác) vì nó chứa các yếu tố sở hữu trí tuệ được bảo vệ mạnh mẽ: thương hiệu chính thức (LG,
+  Monster, Logitech, Gen.G)... Đây là vấn đề nội dung thiết kế, không phải vấn đề lựa chọn nền
+  tảng — Etsy, Amazon, TikTok Shop, và Shopify đều sẽ từ chối hoặc gỡ bỏ danh sách này..."
+```
+Xác nhận đúng thiết kế: 2 câu hỏi (top_platform_suggestion "tốt nhất là gì" vs
+selected_platform_suitable "cái tôi chọn có ổn không") tách biệt hoàn toàn — top_platform_suggestion
+vẫn hợp lý theo niche, trong khi selected_platform_suitable trả lời thẳng "không" kèm lý do cụ
+thể trích đúng evidence thật, đúng yêu cầu.

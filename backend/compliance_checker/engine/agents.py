@@ -752,7 +752,10 @@ def run_agent3_reasoning(image_base64: "str | list[str] | None", black_box_resul
 # giúp positioning_notes chính xác hơn (nhìn ảnh thật thay vì chỉ đọc lại text evidence), không
 # làm giảm chất lượng hay đổi ý nghĩa field nào.
 
-def _build_synthesis_and_reasoning_prompt(evidence_bundle: dict, black_box_result: dict, pdf_text_blocks: "list | None") -> tuple[str, str]:
+def _build_synthesis_and_reasoning_prompt(
+    evidence_bundle: dict, black_box_result: dict, pdf_text_blocks: "list | None",
+    platform: "str | None", target_country: str,
+) -> tuple[str, str]:
     bbox_note = (
         "This design comes from a digital-native PDF — real pixel bounding boxes are provided "
         "below for text elements; use them directly instead of estimating a grid position for text."
@@ -764,9 +767,48 @@ def _build_synthesis_and_reasoning_prompt(evidence_bundle: dict, black_box_resul
     )
     bbox_data = json.dumps(pdf_text_blocks, ensure_ascii=False) if pdf_text_blocks else "(not available — use grid description)"
 
+    # (2026-08-22, MỚI) TASK C — thẩm định platform+country user ĐÃ CHỌN, giờ chuyển về ĐÂY
+    # (từ run_agent4_market_suggestion cũ) vì CHỈ ở đây mới có verdict/evidence thật để trả lời
+    # trung thực — xem ghi chú đầy đủ trong run_agent4_market_suggestion(). Chỉ hỏi khi platform
+    # thật sự được truyền vào.
+    platform_clean = (platform or "").lower().strip()
+    country_clean = (target_country or "US").lower().strip()
+    task_c = ""
+    task_c_json = ""
+    if platform_clean:
+        selected_policy = load_compliance_policy_context(platform_clean, country_clean) or "(no local policy snapshot on file for this market yet)"
+        task_c = f"""
+
+TASK C — SELECTED PLATFORM SUITABILITY: the user has chosen to list this design on
+platform="{platform_clean}", country="{country_clean.upper()}". Its policy (for reference):
+[{platform_clean.upper()}, {country_clean.upper()}]
+{selected_policy}
+
+Given the FINAL VERDICT and its triggering evidence above, decide:
+- `selected_platform_suitable` (true/false): is THIS specific platform+country combo actually
+  suitable to list this design AS-IS?
+- `selected_platform_rationale`: explain why, in 1-2 sentences.
+
+🚨 BE DIRECT, do not hedge to be polite:
+- If the verdict is BLOCKED because of a clear, unambiguous real IP element (an exact/near-exact
+  real logo, a real character, a real celebrity's likeness/name, a real trademarked phrase, a
+  reproduction of real copyrighted artwork) — say `false` PLAINLY, and state that this is a
+  content problem, not a platform-choice problem: this exact design would likely be rejected on
+  ANY of the four platforms (Etsy/Amazon/TikTok Shop/Shopify), not just this one — the fix is to
+  change the design (see fix_suggestions), not to switch platforms.
+- If the verdict is RISKY, weigh the SPECIFIC platform's own policy strictness above — `false` is
+  still the right answer if that platform is known to be strict about this category, `true` with
+  a caveat is fine if the risk is genuinely minor for that platform.
+- If the verdict is SAFE, `selected_platform_suitable` is `true` unless the platform's own policy
+  above raises a real, specific concern beyond the compliance check itself.
+- This question is INDEPENDENT from what you'd recommend as the "best" platform elsewhere in the
+  system — the user did not ask "what's best", they asked "is what I picked okay". Answer THAT
+  question honestly, even if the honest answer is "no"."""
+        task_c_json = ', "selected_platform_suitable": true, "selected_platform_rationale": "lý do ngắn gọn, thẳng thắn, viết bằng tiếng Việt"'
+
     system_prompt = f"""You are a Senior Compliance Advisor for a Print-on-Demand IP compliance system,
-doing TWO related tasks in ONE pass over the same evidence — both grounded in a FINAL VERDICT
-already decided by deterministic Python code downstream, NOT by you.
+doing related tasks in ONE pass over the same evidence — all grounded in a FINAL VERDICT already
+decided by deterministic Python code downstream, NOT by you.
 
 📌 EVIDENCE BUNDLE (from Agent 2 vision + OpenCV modules + trademark text resolver):
 {json.dumps(evidence_bundle, ensure_ascii=False)}
@@ -790,13 +832,14 @@ TASK B — REASONING + FIX: using the FINAL VERDICT and its triggering evidence 
 1. `reasoning`: a clear paragraph explaining WHY this verdict was reached, referencing the evidence.
 2. `fix_suggestions`: if the triggering evidence is non-empty, one entry PER violation category,
    each with a concrete, actionable fix (e.g. "Thay logo Nike bằng icon tự thiết kế riêng"). If
-   empty (fully SAFE), return an empty list.
+   empty (fully SAFE), return an empty list.{task_c}
 
-🌐 OUTPUT LANGUAGE: write "location_description", "citation", "summary", "reasoning", and every
-"suggestion" in professional, standard commercial Vietnamese (tiếng Việt chuẩn thương mại — clear,
-formal business tone, no slang). Keep "category" (Task A) and "violation" (Task B) EXACTLY as the
-category key they correspond to in the evidence above (English, e.g. "logo_similarity") — do NOT
-translate them, downstream code/UI matches on this exact string.
+🌐 OUTPUT LANGUAGE: write "location_description", "citation", "summary", "reasoning",
+"selected_platform_rationale", and every "suggestion" in professional, standard commercial
+Vietnamese (tiếng Việt chuẩn thương mại — clear, formal business tone, no slang). Keep "category"
+(Task A) and "violation" (Task B) EXACTLY as the category key they correspond to in the evidence
+above (English, e.g. "logo_similarity") — do NOT translate them, downstream code/UI matches on
+this exact string.
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only.
 
@@ -805,9 +848,9 @@ REQUIRED JSON SHAPE:
   "positioning_notes": [{{"category": "logo_similarity", "location_description": "góc trên-giữa thiết kế", "citation": "đối chiếu với cơ sở dữ liệu tham chiếu đã biên soạn sẵn"}}],
   "summary": "tóm tắt trung lập, ngắn gọn về toàn bộ bằng chứng phát hiện được",
   "reasoning": "đoạn giải thích lý do ra verdict, viết bằng tiếng Việt",
-  "fix_suggestions": [{{"violation": "logo_similarity", "suggestion": "cách sửa cụ thể, làm được ngay, viết bằng tiếng Việt"}}]
+  "fix_suggestions": [{{"violation": "logo_similarity", "suggestion": "cách sửa cụ thể, làm được ngay, viết bằng tiếng Việt"}}]{task_c_json}
 }}"""
-    user_prompt = "Complete both tasks above — positioning synthesis, and reasoning/fix suggestions — based on the design image and the evidence/verdict above."
+    user_prompt = "Complete the task(s) above — positioning synthesis, reasoning/fix suggestions, and (if asked) selected-platform suitability — based on the design image and the evidence/verdict above."
     return system_prompt, user_prompt
 
 
@@ -816,10 +859,16 @@ def run_synthesis_and_reasoning(
     evidence_bundle: dict,
     black_box_result: dict,
     pdf_text_blocks: "list | None" = None,
+    platform: "str | None" = None,
+    target_country: str = "US",
 ) -> dict:
     """Điểm vào MỚI orchestrator.py gọi thay cho run_group_c_synthesis() + run_agent3_reasoning()
-    tuần tự — xem ghi chú khối trên. Output shape GIỮ NGUYÊN, gộp cả 4 field của 2 hàm gốc."""
-    system_prompt, user_prompt = _build_synthesis_and_reasoning_prompt(evidence_bundle, black_box_result, pdf_text_blocks)
+    tuần tự — xem ghi chú khối trên. Output shape GIỮ NGUYÊN 4 field gốc, CỘNG THÊM (2026-08-22)
+    selected_platform_suitable/selected_platform_rationale — chuyển từ run_agent4_market_suggestion()
+    sang đây vì đây là nơi DUY NHẤT đã biết verdict/evidence thật để thẩm định trung thực."""
+    system_prompt, user_prompt = _build_synthesis_and_reasoning_prompt(
+        evidence_bundle, black_box_result, pdf_text_blocks, platform, target_country
+    )
     raw = _call_llm_json(system_prompt, user_prompt, image_base64=image_base64, temperature=0.25)
 
     notes = raw.get("positioning_notes") if isinstance(raw.get("positioning_notes"), list) else []
@@ -833,12 +882,19 @@ def run_synthesis_and_reasoning(
         {"violation": str(f.get("violation", "")), "suggestion": str(f.get("suggestion", ""))}
         for f in fixes if isinstance(f, dict)
     ]
-    return {
+    result = {
         "positioning_notes": clean_notes,
         "summary": str(raw.get("summary", "")),
         "reasoning": str(raw.get("reasoning", "")),
         "fix_suggestions": clean_fixes,
+        "selected_platform_suitable": None,
+        "selected_platform_rationale": "",
     }
+    if (platform or "").strip():
+        suitable = raw.get("selected_platform_suitable")
+        result["selected_platform_suitable"] = bool(suitable) if isinstance(suitable, bool) else None
+        result["selected_platform_rationale"] = str(raw.get("selected_platform_rationale", ""))
+    return result
 
 
 # =====================================================================
@@ -856,14 +912,17 @@ def run_agent4_market_suggestion(niche: str, style: str, target_country: str = "
     Giờ dùng target_country thật — CHƯA có data policy/trend ngoài US nên với quốc gia khác,
     load_compliance_policy_context()/load_trend_context() trả rỗng (fallback-safe, không lỗi).
 
-    ⚠️ FIX #2 (khoảng trống thiết kế, không phải bug): top_country_suggestion/top_platform_suggestion
-    là gợi ý ĐỘC LẬP của Agent 4 (đúng đặc tả CLAUDE.md gốc — "gợi ý", không phải "thẩm định"),
-    KHÔNG hề biết/không quan tâm user đã tự chọn platform gì — nên dù bạn chọn Amazon, Agent 4
-    vẫn có thể gợi ý Etsy nếu nó thật sự tốt hơn, và điều đó KHÔNG trả lời được câu hỏi "platform
-    tôi chọn có ổn không". Thêm 2 field MỚI, RIÊNG biệt: selected_platform_suitable (bool) +
-    selected_platform_rationale (str) — thẩm định đúng platform+country user ĐÃ CHỌN, hỏi trong
-    CÙNG 1 lần gọi LLM (không tốn thêm API call). Chỉ hỏi khi platform thật sự được truyền vào
-    (None nếu user không chọn platform — không có gì để thẩm định).
+    ⚠️ (2026-08-22, THIẾT KẾ LẠI) selected_platform_suitable/selected_platform_rationale ĐÃ RỜI
+    khỏi hàm này — CHUYỂN sang run_synthesis_and_reasoning() (chạy SAU black box). Lý do: Agent 4
+    chạy SONG SONG cùng Agent 2/OpenCV/trademark (TRƯỚC khi verdict được quyết định), nên KHÔNG
+    THỂ biết design có thật sự vi phạm hay không khi trả lời câu "platform user chọn có phù hợp
+    không" — phát hiện thật qua rà file mẫu BGK (design_samples_template.xlsx): phần lớn test
+    case là sao chép TRỰC TIẾP tour poster/album cover/logo thật (BLOCKED chắc chắn) nhưng nếu
+    hỏi câu thẩm định platform ở ĐÂY, Agent 4 mù verdict nên dễ trả lời chung chung/né tránh thay
+    vì thẳng thắn "KHÔNG phù hợp — vì đây là bản sao logo/ảnh thật, sẽ bị từ chối ở BẤT KỲ
+    platform nào, không phải vấn đề chọn sai platform". Giờ hàm này CHỈ còn làm ĐÚNG 1 việc: gợi
+    ý ĐỘC LẬP (top_country_suggestion/top_platform_suggestion/rationale) dựa trên niche/style —
+    không thẩm định platform user đã chọn nữa.
     """
     country_clean = (target_country or "US").lower().strip()
     platform_clean = (platform or "").lower().strip()
@@ -898,30 +957,18 @@ requested country right now) versus your own general knowledge of other markets 
 country has verified local policy data when it does not.
 """
 
-    selected_combo_header = ""
-    selected_combo_task = ""
-    selected_combo_json = ""
-    if platform_clean:
-        selected_combo_header = (
-            f'\n📌 USER HAS ALREADY CHOSEN (this is NOT your recommendation to make): platform="{platform_clean}", '
-            f'country="{country_clean.upper()}"\n'
-        )
-        selected_combo_task = f"""
-3. `selected_platform_suitable` (true/false): SEPARATELY assess the platform+country the user
-   ALREADY CHOSE ("{platform_clean}" in "{country_clean.upper()}") — is THIS specific combo
-   suitable/safe to list this design on, based on that platform's own IP-compliance risk (NOT the
-   platform you recommended in item 1 — the two answers can differ, e.g. the user picked Amazon but
-   you recommended Etsy as better; still answer honestly whether Amazon itself is fine, don't dodge).
-4. `selected_platform_rationale`: short rationale for item 3, citing the policy of the user's
-   ACTUAL chosen platform "{platform_clean}" above (if that policy is marked as missing data, say so honestly)."""
-        selected_combo_json = (
-            ', "selected_platform_suitable": true, '
-            '"selected_platform_rationale": "lý do ngắn gọn cho platform/country user ĐÃ CHỌN, viết bằng tiếng Việt, trích dẫn đúng policy của platform đó"'
-        )
+    selected_note = (
+        f'\n📌 FOR CONTEXT ONLY (NOT a question to answer here — a separate, verdict-aware check '
+        f'elsewhere handles "is the user\'s chosen platform suitable"): the user has already '
+        f'selected platform="{platform_clean}", country="{country_clean.upper()}" for this design. '
+        f'Feel free to compare against it in your rationale if relevant, but you are NOT being asked '
+        f'to judge it here.\n'
+        if platform_clean else ""
+    )
 
     system_prompt = f"""You are a Market/Platform Advisor for Print-on-Demand sellers, specializing in
 IP compliance risk per platform.
-{selected_combo_header}
+{selected_note}
 📌 TARGET COUNTRY REQUESTED: {country_clean.upper()}
 📌 NICHE: {niche} | STYLE: {style}
 📌 PLATFORM IP POLICIES (for {country_clean.upper()}):
@@ -933,32 +980,25 @@ TASK:
 1. `top_country_suggestion`/`top_platform_suggestion`: your OWN independent recommendation of the
    single best country+platform to launch this niche/style on (commercial fit + IP-compliance
    risk) — this does NOT need to match what the user already selected, if any.
-2. `rationale`: short rationale for #1.{selected_combo_task}
+2. `rationale`: short rationale for #1.
 
 If policy/trend context above is marked as missing, say so honestly instead of inventing details.
 
-🌐 OUTPUT LANGUAGE: write "rationale" and "selected_platform_rationale" in professional, standard
-commercial Vietnamese (tiếng Việt chuẩn thương mại — clear, formal business tone, no slang). Keep
-"top_country_suggestion" as a plain 2-letter ISO country code and "top_platform_suggestion" as the
-platform's identifier (etsy/amazon/tiktok/shopify) — do NOT translate either of those two.
+🌐 OUTPUT LANGUAGE: write "rationale" in professional, standard commercial Vietnamese (tiếng Việt
+chuẩn thương mại — clear, formal business tone, no slang). Keep "top_country_suggestion" as a
+plain 2-letter ISO country code and "top_platform_suggestion" as the platform's identifier
+(etsy/amazon/tiktok/shopify) — do NOT translate either of those two.
 
 🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only. Base your
 answer on the ACTUAL context above — do NOT copy the example values below verbatim, they are
 placeholders only.
 
 REQUIRED JSON SHAPE (keys only, fill in real values from the context above):
-{{"top_country_suggestion": "<2-letter country code>", "top_platform_suggestion": "<platform name>", "rationale": "lý do ngắn gọn, viết bằng tiếng Việt, có trích dẫn policy/trend context ở trên, hoặc nêu rõ nếu thiếu data"{selected_combo_json}}}"""
+{{"top_country_suggestion": "<2-letter country code>", "top_platform_suggestion": "<platform name>", "rationale": "lý do ngắn gọn, viết bằng tiếng Việt, có trích dẫn policy/trend context ở trên, hoặc nêu rõ nếu thiếu data"}}"""
     user_prompt = f"Recommend the best country/platform for a '{niche}' niche, '{style}' style design targeting {country_clean.upper()}."
     raw = _call_llm_json(system_prompt, user_prompt, temperature=0.4)
-    result = {
+    return {
         "top_country_suggestion": str(raw.get("top_country_suggestion", "")),
         "top_platform_suggestion": str(raw.get("top_platform_suggestion", "")),
         "rationale": str(raw.get("rationale", "")),
-        "selected_platform_suitable": None,
-        "selected_platform_rationale": "",
     }
-    if platform_clean:
-        suitable = raw.get("selected_platform_suitable")
-        result["selected_platform_suitable"] = bool(suitable) if isinstance(suitable, bool) else None
-        result["selected_platform_rationale"] = str(raw.get("selected_platform_rationale", ""))
-    return result
