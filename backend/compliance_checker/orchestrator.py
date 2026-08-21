@@ -391,11 +391,20 @@ async def process_one_design(
                 pass
 
 
-async def process_batch(rows: list[dict], platform: "str | None" = None, target_country: str = "US", max_concurrency: int = 5) -> dict:
+async def process_batch(rows: list[dict], platform: "str | None" = None, target_country: str = "US", max_concurrency: int = 1) -> dict:
     """
     rows: list dict đã chuẩn hoá từ csv_batch.parse_csv_rows() (có _row_index, _input_ref,
     file_path/url tuỳ dòng). Exception ở 1 design KHÔNG được làm hỏng cả batch — catch riêng
     từng cái trong with_limit(), KHÔNG chỉ dựa vào return_exceptions=True ở gather ngoài cùng.
+
+    ⚠️ (2026-08-22) max_concurrency default ĐỔI 5 -> 1 (chạy TUẦN TỰ) — phát hiện thật qua batch
+    10 link crash "Failed to fetch" ngay lập tức trên Render: N design chạy ĐỒNG THỜI (mỗi design
+    tự tải ảnh + BlazeFace + giữ payload Vision trong RAM cùng lúc) nhân N lần áp lực bộ nhớ so
+    với 1 design đơn — vốn ĐÃ từng tự crash process 1 mình (xem docs.md, mục OOM). Tuần tự loại
+    bỏ hệ số nhân N-cùng-lúc, nhưng KHÔNG đảm bảo tuyệt đối hết OOM (1 design nặng đơn lẻ vẫn có
+    thể chạm trần RAM gói Render đang dùng — vẫn cần xác nhận RAM thật của gói đó). Vẫn nhận
+    tham số max_concurrency > 1 nếu caller CHỦ Ý truyền vào (route/schema cho phép 1-20), CHỈ đổi
+    GIÁ TRỊ MẶC ĐỊNH khi không truyền gì.
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 

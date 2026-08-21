@@ -80,7 +80,7 @@ async def compliance_batch_csv(
     file: UploadFile = File(...),
     platform: str = Form(default=None),
     target_country: str = Form(default="US"),
-    max_concurrency: int = Form(default=5),
+    max_concurrency: int = Form(default=1),  # (2026-08-22) mặc định đổi 5->1, xem orchestrator.process_batch
 ):
     """
     Cách nhập 'import CSV/XLSX' — batch xử lý hàng loạt qua file upload trực tiếp. Hỗ trợ CẢ

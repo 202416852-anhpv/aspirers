@@ -49,6 +49,7 @@ export function BatchSummary({ data }: BatchSummaryProps) {
           ⬇ Tải CSV báo cáo
         </button>
       )}
+      <p className="empty-note batch-detail-hint">Chi tiết từng dòng (niche, evidence, reasoning, fix suggestion...) có đầy đủ trong file CSV tải về.</p>
     </div>
   );
 }

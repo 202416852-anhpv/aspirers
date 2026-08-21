@@ -10,7 +10,6 @@ import { SettingsBar, type SettingsValue } from "./components/composer/SettingsB
 import { Composer, type ComposerIntent } from "./components/composer/Composer";
 import { ResultCard } from "./components/result/ResultCard";
 import { BatchSummary } from "./components/batch/BatchSummary";
-import { BatchRowMessage } from "./components/batch/BatchRowMessage";
 import { useCheckDesign } from "./hooks/useCheckDesign";
 import { useBatchCheck } from "./hooks/useBatchCheck";
 import { checkHealth, getBackendUrl, setBackendUrl } from "./api/client";
@@ -84,12 +83,12 @@ function App() {
 
       batchCheck.mutate(intent.kind === "batch-file" ? { file: intent.file, ...common } : { batch_file_url: intent.url, ...common }, {
         onSuccess: (report) => {
+          // (2026-08-22) CHỈ còn 1 message tóm tắt (BatchSummary — thống kê + nút tải CSV) —
+          // KHÔNG còn render N ResultCard chi tiết từng dòng nữa (bản cũ, xem
+          // components/batch/BatchRowMessage.tsx — vẫn giữ file đó, không xoá, chỉ không dùng ở
+          // đây). Lý do: batch lớn (chục dòng) làm rối màn hình chat — chi tiết từng dòng vẫn có
+          // đầy đủ trong CSV tải về (backend đã trả sẵn qua report.csv_export).
           replaceMessage(loadingId, <BatchSummary data={report} />);
-          // Mỗi row = 1 message riêng (thay bảng-to-click-expand của bản cũ — xem báo cáo UX).
-          setMessages((prev) => [
-            ...prev,
-            ...report.rows.map((row) => ({ id: uid(), role: "assistant" as const, content: <BatchRowMessage row={row} /> })),
-          ]);
           setSessions((prev) => [...prev, { id: loadingId, label: `${label} (${report.total} dòng)`, verdict: "BATCH" }]);
         },
         onError: (err) => {

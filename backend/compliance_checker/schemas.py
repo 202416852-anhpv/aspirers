@@ -422,4 +422,4 @@ class ComplianceBatchRequest(BaseModel):
     )
     platform: Optional[str] = Field(default=None)
     target_country: Optional[str] = Field(default="US")
-    max_concurrency: int = Field(default=5, ge=1, le=20)
+    max_concurrency: int = Field(default=1, ge=1, le=20)  # (2026-08-22) mặc định đổi 5->1, xem orchestrator.process_batch

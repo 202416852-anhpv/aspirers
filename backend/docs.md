@@ -627,3 +627,27 @@ file/link ảnh nào thì không đánh giá được gì). Đây đã ĐÚNG v�
 _INPUT_COLUMN_ALIASES` đang làm — mỗi dòng CSV/XLSX có 1 cột design (link/path) CỘNG THÊM các
 cột metadata tuỳ chọn (`platform`, `target_country`/`country`/`market`/`target_market`,
 `niche_hint`/`niche`) đọc kèm và truyền xuống `process_one_design()`. Không có gap ở phần này.
+
+## 16. Batch chạy tuần tự mặc định (max_concurrency 5→1) + FE chỉ hiện summary (2026-08-22)
+
+**Nguyên nhân**: batch 10 link crash "Failed to fetch" ngay lập tức trên Render — cùng gốc OOM
+đã xác nhận trước đó (1 design nặng đơn lẻ từng tự crash process), nhưng batch nhân N lần vì
+`max_concurrency=5` mặc định cho N design chạy ĐỒNG THỜI, mỗi design tự tải ảnh + BlazeFace +
+giữ payload Vision trong RAM cùng lúc. Batch đợi TOÀN BỘ xong mới gộp 1 response — process chết
+giữa chừng thì mất trắng, không có gì trả về (khớp đúng "Failed to fetch", không phải timeout).
+
+**Đã sửa**: `max_concurrency` default đổi 5 → 1 (chạy tuần tự) ở cả 3 nơi (`orchestrator.
+process_batch`, `api/routes.py::compliance_batch_csv` Form default, `schemas.
+ComplianceBatchRequest` Field default) — vẫn nhận giá trị khác nếu caller CHỦ Ý truyền
+(range 1-20 giữ nguyên). ⚠️ KHÔNG đảm bảo tuyệt đối hết OOM — 1 design nặng đơn lẻ vẫn có thể
+chạm trần RAM gói Render đang dùng, vẫn cần xác nhận RAM thật của gói (câu hỏi cũ, chưa có
+câu trả lời).
+
+Verify thật (2 dòng local, `Gen.G-banner.jpg` + 1 PDF): `ELAPSED: 94.7s` ≈ 2×47s/design — khớp
+đúng chạy TUẦN TỰ thật (không phải 2 design chạy song song cùng lúc), verdict/error đúng shape.
+
+**FE**: batch giờ CHỈ hiện 1 message `BatchSummary` (thống kê + nút tải CSV) — KHÔNG còn render
+N `ResultCard` chi tiết từng dòng trong chat nữa (giảm rối màn hình với batch lớn). Chi tiết
+từng dòng vẫn đầy đủ trong CSV tải về (`report.csv_export`, cơ chế đã có sẵn từ trước, không
+phải tính năng mới). `BatchRowMessage.tsx` GIỮ NGUYÊN (không xoá), chỉ không còn được gọi từ
+App.tsx — dễ bật lại nếu sau này cần hiện chi tiết ngay trong chat.
