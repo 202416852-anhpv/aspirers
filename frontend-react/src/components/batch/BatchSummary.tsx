@@ -7,6 +7,11 @@ import type { BatchReport } from "../../api/types";
 
 export interface BatchSummaryProps {
   data: BatchReport;
+  /** (2026-08-22, MỚI) true khi stream bị ngắt giữa chừng (server lỗi/crash) — data lúc này
+   * CHỈ gồm những dòng đã kịp nhận được TRƯỚC KHI đứt, không phải cả batch. Hiện banner cảnh
+   * báo rõ ràng thay vì để user tưởng nhầm đây là kết quả đầy đủ. */
+  partial?: boolean;
+  partialMessage?: string;
 }
 
 // (2026-08-22) FIX mojibake thật khi mở CSV trong Excel: file KHÔNG có BOM (byte order mark)
@@ -29,9 +34,15 @@ function downloadCsv(csvExport: string) {
   URL.revokeObjectURL(url);
 }
 
-export function BatchSummary({ data }: BatchSummaryProps) {
+export function BatchSummary({ data, partial, partialMessage }: BatchSummaryProps) {
   return (
     <div className="summary-row">
+      {partial && (
+        <p className="batch-partial-warning">
+          ⚠️ Batch KHÔNG hoàn tất — kết nối bị ngắt giữa chừng, chỉ có kết quả cho {data.total} dòng đã kịp xử lý xong.
+          {partialMessage ? ` ${partialMessage}` : ""} Kiểm tra log backend (Render) đúng thời điểm này để biết lý do (thường là hết bộ nhớ khi gặp 1 dòng nặng).
+        </p>
+      )}
       <div className="summary-pill">
         <b>{data.total}</b>Tổng số
       </div>

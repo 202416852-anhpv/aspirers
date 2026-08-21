@@ -12,7 +12,7 @@ import { ResultCard } from "./components/result/ResultCard";
 import { BatchSummary } from "./components/batch/BatchSummary";
 import { BatchProgress } from "./components/batch/BatchProgress";
 import { useCheckDesign } from "./hooks/useCheckDesign";
-import { checkHealth, getBackendUrl, setBackendUrl, runBatchByFileStreaming, runBatchByUrlStreaming } from "./api/client";
+import { checkHealth, getBackendUrl, setBackendUrl, runBatchByFileStreaming, runBatchByUrlStreaming, PartialBatchStreamError } from "./api/client";
 import type { BatchRowResult } from "./api/types";
 
 let nextId = 0;
@@ -118,6 +118,24 @@ function App() {
           setSessions((prev) => [...prev, { id: loadingId, label: `${label} (${report.total} dòng)`, verdict: "BATCH" }]);
         })
         .catch((err: Error) => {
+          if (err instanceof PartialBatchStreamError) {
+            // (2026-08-22, MỚI) Stream đứt giữa chừng (thường do backend crash/hết bộ nhớ ở 1
+            // dòng nặng) — vẫn hiện được kết quả CỦA NHỮNG DÒNG ĐÃ KỊP XONG (counts đã đếm sẵn
+            // trong onRow ở trên) thay vì mất trắng chỉ vì vài dòng cuối chưa xử lý tới.
+            const partialReport = {
+              total: counts.done,
+              safe_count: counts.safe,
+              risky_count: counts.risky,
+              blocked_count: counts.blocked,
+              error_count: counts.error,
+              graded_count: 0,
+              verdict_accuracy: null,
+              rows: err.rows,
+            };
+            replaceMessage(loadingId, <BatchSummary data={partialReport} partial partialMessage={err.message} />);
+            setSessions((prev) => [...prev, { id: loadingId, label: `${label} (${counts.done} dòng, CHƯA hoàn tất)`, verdict: "ERROR" }]);
+            return;
+          }
           replaceMessage(loadingId, <span className="error-note">Lỗi: {err.message}</span>);
           setSessions((prev) => [...prev, { id: loadingId, label, verdict: "ERROR" }]);
         })

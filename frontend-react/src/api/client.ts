@@ -164,6 +164,20 @@ export interface BatchStreamHandlers {
   onRow?: (row: BatchRowResult) => void;
 }
 
+/** (2026-08-22, MỚI) Stream bị NGẮT GIỮA CHỪNG (server/gateway đóng kết nối trước khi kịp gửi
+ * dòng "summary" cuối — vd process backend crash OOM giữa batch, xem docs.md) — mang theo TOÀN
+ * BỘ row đã nhận được TRƯỚC KHI đứt, để caller vẫn hiện được kết quả riêng phần thay vì mất
+ * trắng. Trước đây chỉ throw Error thường -> mất hết N dòng đã xử lý xong dù rõ ràng vẫn còn
+ * trong bộ nhớ trình duyệt, gây khó chịu + khó chẩn đoán không cần thiết. */
+export class PartialBatchStreamError extends Error {
+  rows: BatchRowResult[];
+  constructor(message: string, rows: BatchRowResult[]) {
+    super(message);
+    this.name = "PartialBatchStreamError";
+    this.rows = rows;
+  }
+}
+
 /** Đọc response body dạng NDJSON (mỗi dòng 1 JSON object, ngăn cách bằng "\n") qua
  * ReadableStream — gọi onRow() cho MỌI dòng, TRỪ dòng cuối cùng (nhận diện bằng key "summary")
  * dùng để build BatchReport trả về cuối cùng. KHÔNG dùng thư viện ngoài (fetch + TextDecoder
@@ -194,7 +208,7 @@ async function consumeNdjsonBatchStream(
       if (!line) continue;
       const parsed = JSON.parse(line);
       if ("summary" in parsed) {
-        if (parsed.summary?.error) throw new Error(parsed.summary.error);
+        if (parsed.summary?.error) throw new PartialBatchStreamError(parsed.summary.error, rows);
         summary = parsed.summary;
       } else {
         const row = parsed as BatchRowResult;
@@ -203,7 +217,12 @@ async function consumeNdjsonBatchStream(
       }
     }
   }
-  if (!summary) throw new Error("Stream kết thúc nhưng không nhận được dòng tóm tắt cuối cùng — kết quả có thể chưa đầy đủ.");
+  if (!summary) {
+    throw new PartialBatchStreamError(
+      `Kết nối bị ngắt giữa chừng — server có thể đã gặp lỗi hoặc hết bộ nhớ khi xử lý 1 dòng nặng (đã nhận được ${rows.length} dòng trước khi đứt).`,
+      rows,
+    );
+  }
   return { ...summary, rows };
 }
 
