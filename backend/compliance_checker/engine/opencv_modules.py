@@ -214,7 +214,15 @@ _FACE_WINDOW_SCALES = (1.0, 0.6, 0.4, 0.27, 0.18)
 _FACE_WINDOW_OVERLAP = 0.5
 _FACE_MIN_WINDOW_PX = 60
 
-_FACE_MAX_CROPS = 5          # top N mặt điểm cao nhất gửi cho Agent 2 (kiểm soát chi phí/kích thước request)
+_FACE_MAX_CROPS = 3          # top N mặt điểm cao nhất gửi cho Agent 2 (kiểm soát chi phí/kích thước
+                              # request) — (2026-08-22) GIẢM từ 5 -> 3 để giảm latency: ảnh đông người
+                              # (vd banner sự kiện) từng đẩy Agent 2 lên tới 6 ảnh/message (1 design +
+                              # 5 face crop), là nhánh nặng nhất trong pipeline. Đây CHỈ là cap số
+                              # lượng gửi đi/hiện overlay — KHÔNG đụng tới bất kỳ threshold/config nào
+                              # của thuật toán detect (window scales/overlap/score...), vẫn giữ NGUYÊN
+                              # 100% như script gốc đã fine-tune (xem ghi chú đầu file, mục 3). Trade-off
+                              # đã xác nhận: ảnh có >3 mặt sẽ chỉ còn khoanh vùng/định danh 3 mặt điểm
+                              # cao nhất thay vì 5 — 2 mặt điểm thấp nhất KHÔNG còn gửi Agent 2 nữa.
 _FACE_UPSCALE_MIN_SIDE = 160  # crop nhỏ hơn cạnh này (thường gặp, mặt xa) -> phóng to trước khi encode,
                               # giúp Agent 2 nhận diện dễ hơn — CHỈ ảnh hưởng bước encode, KHÔNG ảnh
                               # hưởng gì tới bbox/score/threshold detect (giữ nguyên như script gốc).

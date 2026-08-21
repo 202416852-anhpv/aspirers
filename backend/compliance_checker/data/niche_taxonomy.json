@@ -1,6 +1,6 @@
 {
-  "source": "Tổng hợp thủ công từ kiến thức phổ biến về thị trường Print-on-Demand (Etsy/Amazon Merch/TikTok Shop) - KHÔNG phải crawl tự động, dùng làm điểm khởi đầu tiêm vào prompt Agent 1, Vision KHÔNG bị giới hạn chỉ trong danh sách này (xem compliance_checker/agents.py::_build_classify_prompt). sub_niches (2026-08-22) cùng nguồn/cùng cách dùng - ví dụ minh hoạ cho Agent 1 tham khảo, KHÔNG giới hạn Vision chỉ được chọn trong danh sách con này.",
-  "last_updated": "2026-08-20",
+  "source": "Tổng hợp thủ công từ kiến thức phổ biến về thị trường Print-on-Demand (Etsy/Amazon Merch/TikTok Shop) - KHÔNG phải crawl tự động, dùng làm điểm khởi đầu tiêm vào prompt Agent 1, Vision KHÔNG bị giới hạn chỉ trong danh sách này (xem compliance_checker/agents.py::_build_classify_prompt). sub_niches (2026-08-22) cùng nguồn/cùng cách dùng - ví dụ minh hoạ cho Agent 1 tham khảo, KHÔNG giới hạn Vision chỉ được chọn trong danh sách con này. (2026-08-22, MỞ RỘNG) 12 niche cuối (từ 'Music Fan' trở đi) + 8 style cuối + motif_examples trích XUẤT THẬT từ compliance_checker/test_pdf_images_link/design_samples_template.xlsx (30 dòng expected_niche/expected_sub_niche/expected_style/expected_motifs — file mẫu THẬT của BGK, không phải tự nghĩ) — đây là taxonomy THẬT giám khảo dùng để chấm, ưu tiên tham khảo cao hơn 10 niche/10 style tự tổng hợp ban đầu.",
+  "last_updated": "2026-08-22",
   "niches": [
     {
       "slug": "christmas_holiday",
@@ -61,6 +61,78 @@
       "label": "Gaming & Esports",
       "note": "Rủi ro logo game/nhân vật game cao",
       "sub_niches": ["retro_arcade", "pc_gaming", "console_gaming", "esports_team_fan", "streamer_content_creator"]
+    },
+    {
+      "slug": "music_fan",
+      "label": "Music Fan / Band Merch",
+      "note": "(2026-08-22, từ file mẫu BGK) Niche XUẤT HIỆN NHIỀU NHẤT trong bộ 30 test case thật (13/30 dòng) — fan merch nghệ sĩ/ban nhạc, rủi ro IP RẤT cao: tên nghệ sĩ/ban nhạc, cover album, chân dung, tour poster.",
+      "sub_niches": ["classic_rock_fan", "rock_band_fan", "metal_band_fan", "metalcore_band_fan", "hip_hop_fan", "hip_hop_band_fan", "pop_star_fan", "reggaeton_latin_pop_fan", "country_folk_music_festival"]
+    },
+    {
+      "slug": "sports_fan",
+      "label": "Sports Fan",
+      "note": "(2026-08-22, từ file mẫu BGK) Fan merch thể thao — rủi ro logo đội/liên đoàn/vận động viên cao (NFL, Olympic...), nhưng tên đội chung chung (vd chỉ chữ 'Bears' font thể thao, không gắn logo cụ thể) có thể SAFE.",
+      "sub_niches": ["nfl_fan", "olympics_ralph_lauren", "generic_sports", "youth_sports_family_support"]
+    },
+    {
+      "slug": "celebrity",
+      "label": "Celebrity Merch",
+      "note": "(2026-08-22, từ file mẫu BGK) Thiết kế xoay quanh người nổi tiếng ngoài âm nhạc — rủi ro celebrity likeness cao nhất.",
+      "sub_niches": ["pop_culture_mashup"]
+    },
+    {
+      "slug": "streetwear",
+      "label": "Streetwear / Luxury Streetwear",
+      "note": "(2026-08-22, từ file mẫu BGK) Rủi ro logo thời trang cao cấp (BAPE, Chrome Hearts, Lethal Angel...) rất cao.",
+      "sub_niches": ["luxury_streetwear", "biker_fashion"]
+    },
+    {
+      "slug": "cartoon",
+      "label": "Cartoon / Character Merch",
+      "note": "(2026-08-22, từ file mẫu BGK) Rủi ro nhân vật hoạt hình có bản quyền (vd Paul Frank/Julius the Monkey).",
+      "sub_niches": ["paul_frank"]
+    },
+    {
+      "slug": "alternative",
+      "label": "Alternative / Tattoo-inspired",
+      "note": "(2026-08-22, từ file mẫu BGK) Phong cách tattoo/alternative — thường SAFE nếu hoạ tiết chung chung (sacred heart, hoa, ngọn lửa...), không gắn thương hiệu cụ thể.",
+      "sub_niches": ["tattoo_art"]
+    },
+    {
+      "slug": "tattoo_art",
+      "label": "Tattoo Art",
+      "note": "(2026-08-22, từ file mẫu BGK) ⚠️ Trùng khái niệm với sub_niche 'tattoo_art' dưới niche 'alternative' ở trên — bản thân file mẫu gốc BGK dùng KHÔNG nhất quán (có dòng gắn 'Tattoo Art' làm niche riêng, có dòng gắn làm sub_niche của 'Alternative'). Giữ nguyên CẢ HAI đúng như dữ liệu gốc, không tự ý gộp/sửa lại cho nhất quán.",
+      "sub_niches": ["sacred_heart"]
+    },
+    {
+      "slug": "cultural_historical",
+      "label": "Cultural / Historical",
+      "note": "(2026-08-22, từ file mẫu BGK) Chủ đề văn hoá/lịch sử — thường SAFE nếu dùng biểu tượng văn hoá chung (dreamcatcher, lông vũ...), không gắn logo/thương hiệu cụ thể.",
+      "sub_niches": ["native_american_heritage"]
+    },
+    {
+      "slug": "political_social_commentary",
+      "label": "Political & Social Commentary",
+      "note": "(2026-08-22, từ file mẫu BGK) Chủ đề chính trị/xã hội — thường SAFE nếu là slogan/hoạ tiết chung, không dùng ảnh/logo có bản quyền.",
+      "sub_niches": ["indigenous_rights_immigration"]
+    },
+    {
+      "slug": "school_education",
+      "label": "School & Education",
+      "note": "(2026-08-22, từ file mẫu BGK) Personalization cao (tên riêng học sinh), thường SAFE.",
+      "sub_niches": ["back_to_school"]
+    },
+    {
+      "slug": "novelty",
+      "label": "Novelty / Generic Sayings",
+      "note": "(2026-08-22, từ file mẫu BGK) Thiết kế câu nói vui/generic, template hoá — thường SAFE nếu không tham chiếu thương hiệu/nhân vật cụ thể.",
+      "sub_niches": ["birthday_personality"]
+    },
+    {
+      "slug": "family_relationships",
+      "label": "Family & Relationships",
+      "note": "(2026-08-22, từ file mẫu BGK) Personalization cao (biệt danh gia đình như 'Gigi'), thường SAFE.",
+      "sub_niches": ["grandmother_gigi"]
     }
   ],
   "styles": [
@@ -73,8 +145,34 @@
     { "slug": "typography_quote", "label": "Typography / Quote-only" },
     { "slug": "botanical_floral", "label": "Botanical / Floral" },
     { "slug": "gothic_dark", "label": "Gothic / Dark Aesthetic" },
-    { "slug": "kawaii_cute", "label": "Kawaii / Cute" }
+    { "slug": "kawaii_cute", "label": "Kawaii / Cute" },
+    { "slug": "retro", "label": "Retro", "note": "(2026-08-22, từ file mẫu BGK) BGK dùng tách riêng khỏi 'vintage', không gộp chung như slug 'vintage_retro' ở trên — giữ cả 2 dạng để khớp cả 2 cách phân loại." },
+    { "slug": "minimalist", "label": "Minimalist", "note": "(2026-08-22, từ file mẫu BGK)" },
+    { "slug": "photographic", "label": "Photographic", "note": "(2026-08-22, từ file mẫu BGK) Ảnh chụp/chân dung thật — style phổ biến nhất cho celebrity/music fan merch trong file mẫu." },
+    { "slug": "vintage", "label": "Vintage", "note": "(2026-08-22, từ file mẫu BGK) BGK dùng tách riêng khỏi 'retro'." },
+    { "slug": "typographic", "label": "Typographic", "note": "(2026-08-22, từ file mẫu BGK)" },
+    { "slug": "bold", "label": "Bold", "note": "(2026-08-22, từ file mẫu BGK)" },
+    { "slug": "cartoon", "label": "Cartoon", "note": "(2026-08-22, từ file mẫu BGK) Trùng tên với niche 'cartoon' ở trên — đây là STYLE (kiểu vẽ), khác niche (chủ đề)." },
+    { "slug": "grunge", "label": "Grunge", "note": "(2026-08-22, từ file mẫu BGK) BGK dùng tách riêng khỏi 'grunge_distressed'." }
   ],
+  "motif_examples": {
+    "note": "(2026-08-22, MỚI) Ví dụ motif chung chung, KHÔNG phải danh sách motif nguy hiểm (khác global_dangerous_motifs bên dưới) — trích + KHÁI QUÁT HOÁ từ cột expected_motifs thật trong design_samples_template.xlsx (bỏ tên riêng/quote cụ thể như tên celeb/ban nhạc — những cái đó thuộc phạm vi suspected_celebrities/suspected_logos/OCR_text, không phải motif chung). Tiêm vào prompt Agent 1 làm ví dụ tham khảo cho field `motifs`, KHÔNG giới hạn Vision chỉ chọn trong danh sách này.",
+    "motifs": [
+      "band_name_text", "album_cover_art", "album_title_text", "tour_dates_poster",
+      "artist_band_portrait", "black_and_white_portrait",
+      "skull_imagery", "roses_flowers", "flames", "crossed_bones", "angel_wings", "heart_symbol",
+      "sacred_heart", "banner_ribbon", "distressed_grunge_text", "gothic_text",
+      "script_typography", "collegiate_text",
+      "camouflage_pattern", "animal_head_silhouette", "monkey_head",
+      "sports_jersey_helmet", "team_mascot_logo", "football_player", "soccer_ball",
+      "national_flag", "olympic_rings", "trademark_registered_symbol",
+      "dreamcatcher_feathers", "native_american_portrait", "circular_border",
+      "mountain_landscape", "vehicle_van", "lightning_background", "straw_hat_accessory",
+      "devil_horror_imagery", "zombie_monster", "blood_splatter",
+      "butterfly_dragonfly", "flower_botanical", "sun_symbol",
+      "pencil_school_supplies", "festival_logo", "duotone_grid_layout"
+    ]
+  },
   "global_dangerous_motifs": {
     "note": "Check UNIVERSAL, chạy bất kể niche detect ra có nằm trong danh sách niches ở trên hay không (xem CLAUDE.md muc 2.1 'Fallback niche ngoài hardcoded') - Agent 1 luôn phải quét các motif này.",
     "motifs": [

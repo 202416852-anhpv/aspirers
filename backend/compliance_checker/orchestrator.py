@@ -6,8 +6,9 @@ Thứ tự thực thi bám sát ĐÚNG mục 8 (concrete pseudocode) của CLAUD
 ASCII ở mục 2 (2 chỗ có khác biệt nhỏ về vị trí Agent 4/Nhóm C — mục 8 là pseudocode chạy
 được nên được coi là nguồn xác thực hơn):
   Call 1 (Agent 1 classify) -> [Agent 2 + match_logo + match_character + trademark_resolver
-  + Agent 4, chạy SONG SONG] -> Black Box (Python, tức thời) -> Nhóm C (synthesis) -> Agent 3
-  (reasoning, chạy SAU black box vì cần biết verdict) -> merge -> trả kết quả.
+  + Agent 4, chạy SONG SONG] -> Black Box (Python, tức thời) -> Nhóm C + Agent 3 (GỘP 1 call,
+  2026-08-22 — xem agents.py::run_synthesis_and_reasoning, tối ưu latency, chạy SAU black box
+  vì cần biết verdict) -> merge -> trả kết quả.
 """
 
 import asyncio
@@ -316,7 +317,10 @@ async def process_one_design(
             suspected_artworks=classify["suspected_artworks"],
         )
 
-        # ---- Nhóm C: tổng hợp + định vị (1 LLM call) ----
+        # ---- Nhóm C + Agent 3 GỘP LÀM 1 (2026-08-22, tối ưu latency — xem agents.py::
+        # run_synthesis_and_reasoning) — CHẠY SAU black box (cần biết verdict để giải thích).
+        # Output SHAPE giữ NGUYÊN như khi còn 2 hàm tuần tự (positioning_notes/summary/
+        # reasoning/fix_suggestions), chỉ còn 1 round-trip LLM thay vì 2.
         evidence_bundle = {
             "suspected_logos": classify["suspected_logos"],
             "suspected_characters": classify["suspected_characters"],
@@ -328,13 +332,10 @@ async def process_one_design(
             "logo_match": logo_match, "char_match": char_match,
             "trademark_flags": trademark_flags,
         }
-        positioning = await asyncio.to_thread(
-            cc_agents.run_group_c_synthesis, evidence_bundle,
+        synthesis_result = await asyncio.to_thread(
+            cc_agents.run_synthesis_and_reasoning, vision_images, evidence_bundle, black_box_result,
             pdf_meta.get("text_blocks_with_bbox") if pdf_meta else None,
         )
-
-        # ---- Agent 3: reasoning + fix suggestion — CHẠY SAU black box (cần biết verdict) ----
-        agent3_result = await asyncio.to_thread(cc_agents.run_agent3_reasoning, vision_images, black_box_result, positioning)
 
         # flagged_regions: khoanh vùng THẬT (Python, KHÔNG LLM đoán toạ độ) cho cả text lẫn mặt
         # đáng nghi — thay thế hoàn toàn cách hiện thumbnail crop riêng trước đây.
@@ -358,11 +359,11 @@ async def process_one_design(
             "final_verdict": black_box_result["final_verdict"],
             "overall_confidence": black_box_result["overall_confidence"],
             "evidence": black_box_result["evidence"],
-            "positioning_notes": positioning["positioning_notes"],
+            "positioning_notes": synthesis_result["positioning_notes"],
             "detected_faces": detected_faces_merged,
             "flagged_regions": flagged_regions,
-            "reasoning": agent3_result["reasoning"],
-            "fix_suggestions": agent3_result["fix_suggestions"],
+            "reasoning": synthesis_result["reasoning"],
+            "fix_suggestions": synthesis_result["fix_suggestions"],
             "market_suggestion": market,
             "font_disclaimer": (
                 "Font detection is best-effort. Recommend manual verification against font "

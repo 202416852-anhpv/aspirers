@@ -236,6 +236,10 @@ def _build_agent1_prompt(
     sub_niches_text = ", ".join(
         sn for n in niche_taxonomy.get("niches", []) for sn in n.get("sub_niches", [])
     ) or "(chưa có danh sách sub_niche tham khảo)"
+    # (2026-08-22, MỚI) motif_examples: ví dụ motif CHUNG CHUNG (khác global_dangerous_motifs —
+    # đó là nhóm an toàn/nguy hiểm riêng) — trích thật từ file mẫu BGK (design_samples_template.xlsx),
+    # giúp field `motifs` bám sát đúng những gì giám khảo mong đợi thay vì Agent 1 tự bịa loại motif.
+    motif_examples_text = ", ".join(niche_taxonomy.get("motif_examples", {}).get("motifs", [])) or "(chưa có ví dụ motif tham khảo)"
 
     system_prompt = f"""You are a Senior IP Compliance Vision Analyst for a Print-on-Demand marketplace.
 Analyze the uploaded design image and classify it — you are NOT limited to the reference lists below, always classify freely even for niches/styles outside them.
@@ -245,6 +249,7 @@ Analyze the uploaded design image and classify it — you are NOT limited to the
 📌 REFERENCE NICHE LIST (not exhaustive, use if it fits, otherwise propose your own): {niches_text}
 📌 REFERENCE SUB-NICHE EXAMPLES (not exhaustive, illustrative only — pick/propose whatever actually fits the niche above): {sub_niches_text}
 📌 REFERENCE STYLE LIST (not exhaustive): {styles_text}
+📌 REFERENCE MOTIF EXAMPLES (general, not exhaustive — illustrative only, propose your own if nothing here fits): {motif_examples_text}
 📌 UNIVERSAL DANGEROUS MOTIFS to always scan for regardless of niche: {motifs_text}
 📌 KNOWN BRAND NAMES to check against (or any other famous brand you recognize outside this list): {brands_text}
 📌 FONT-RISK REFERENCE (background context — commercial fonts commonly used without a license in POD, NOT an exhaustive/confirmable list):
@@ -615,6 +620,12 @@ def run_agent2_verify_candidates(
 
 # =====================================================================
 # NHÓM C — TỔNG HỢP + ĐỊNH VỊ (1 LLM call)
+# ⚠️ (2026-08-22) KHÔNG còn được orchestrator.py gọi trực tiếp nữa — đã GỘP với Agent 3 thành
+# run_synthesis_and_reasoning() (xem bên dưới, sau khối Agent 3) để cắt 1 round-trip LLM tuần
+# tự khỏi critical path (đo thật: pipeline 1 design đang mất 40-50s, phần lớn do 4 lần gọi LLM
+# nối tiếp nhau). Giữ NGUYÊN 2 hàm _build_group_c_prompt/run_group_c_synthesis ở đây — KHÔNG
+# xoá — để dễ tách trở lại nếu cần, và để hàm run_synthesis_and_reasoning() bên dưới có thể đối
+# chiếu logic gốc khi cần sửa sau này.
 # =====================================================================
 
 def _build_group_c_prompt(evidence_bundle: dict, pdf_text_blocks: "list | None") -> tuple[str, str]:
@@ -676,6 +687,8 @@ def run_group_c_synthesis(evidence_bundle: dict, pdf_text_blocks: "list | None" 
 
 # =====================================================================
 # AGENT 3 — REASONING + FIX SUGGESTION (cần ảnh)
+# ⚠️ (2026-08-22) KHÔNG còn được orchestrator.py gọi trực tiếp nữa — xem ghi chú ở khối NHÓM C
+# phía trên + run_synthesis_and_reasoning() bên dưới. Giữ NGUYÊN 2 hàm dưới đây, không xoá.
 # =====================================================================
 
 def _build_agent3_prompt(black_box_result: dict, positioning: dict) -> tuple[str, str]:
@@ -716,6 +729,116 @@ def run_agent3_reasoning(image_base64: "str | list[str] | None", black_box_resul
         for f in fixes if isinstance(f, dict)
     ]
     return {"reasoning": str(raw.get("reasoning", "")), "fix_suggestions": clean_fixes}
+
+
+# =====================================================================
+# NHÓM C + AGENT 3 GỘP LÀM 1 (2026-08-22) — tối ưu latency
+# =====================================================================
+# Lý do gộp: đo thật pipeline 1 design đang mất 40-50s, phần lớn từ 4 lần gọi LLM NỐI TIẾP nhau
+# (Agent 1 -> [Agent 2 + nhánh song song] -> Nhóm C -> Agent 3). Nhóm C (viết positioning_notes)
+# và Agent 3 (viết reasoning/fix_suggestions) có input CHỒNG LẤN gần hoàn toàn (evidence bundle,
+# black_box_result) và Agent 3 TRƯỚC ĐÂY chỉ dùng output Nhóm C làm CONTEXT ĐỌC (không có phụ
+# thuộc 2 chiều nào) -> gộp an toàn thành 1 call, cắt hẳn 1 round-trip tuần tự khỏi critical
+# path (~8-15s/design tuỳ độ dài phản hồi).
+#
+# GIỮ NGUYÊN 100% logic/quy tắc của cả 2 hàm gốc — citation rule, positioning rule (grid 3x3
+# tiếng Việt hoặc bbox PDF thật), "verdict đã quyết định sẵn bởi Python, LLM chỉ giải thích
+# KHÔNG được tự đổi" (CLAUDE.md mục 10), output language tiếng Việt cho field prose/giữ nguyên
+# category-key tiếng Anh. Output SHAPE giữ NGUYÊN — orchestrator.py/schemas.py KHÔNG cần đổi gì,
+# chỉ đổi ĐIỂM GỌI (1 hàm thay vì 2 hàm tuần tự).
+#
+# Khác biệt DUY NHẤT so với trước: phần "positioning" giờ CŨNG thấy được ảnh gốc (Nhóm C cũ là
+# text-only, không có ảnh) vì dùng chung 1 message với phần Agent 3 (vốn cần ảnh) — CHỈ có thể
+# giúp positioning_notes chính xác hơn (nhìn ảnh thật thay vì chỉ đọc lại text evidence), không
+# làm giảm chất lượng hay đổi ý nghĩa field nào.
+
+def _build_synthesis_and_reasoning_prompt(evidence_bundle: dict, black_box_result: dict, pdf_text_blocks: "list | None") -> tuple[str, str]:
+    bbox_note = (
+        "This design comes from a digital-native PDF — real pixel bounding boxes are provided "
+        "below for text elements; use them directly instead of estimating a grid position for text."
+        if pdf_text_blocks else
+        "Describe WHERE each issue appears using a 3x3 grid, written in Vietnamese (e.g. "
+        "\"góc trên-trái\"/\"trên-giữa\"/\"góc trên-phải\"/\"giữa-trái\"/\"chính giữa\"/\"giữa-phải\"/"
+        "\"góc dưới-trái\"/\"dưới-giữa\"/\"góc dưới-phải\") — do NOT attempt precise pixel "
+        "coordinates, vision models are not reliable at that."
+    )
+    bbox_data = json.dumps(pdf_text_blocks, ensure_ascii=False) if pdf_text_blocks else "(not available — use grid description)"
+
+    system_prompt = f"""You are a Senior Compliance Advisor for a Print-on-Demand IP compliance system,
+doing TWO related tasks in ONE pass over the same evidence — both grounded in a FINAL VERDICT
+already decided by deterministic Python code downstream, NOT by you.
+
+📌 EVIDENCE BUNDLE (from Agent 2 vision + OpenCV modules + trademark text resolver):
+{json.dumps(evidence_bundle, ensure_ascii=False)}
+
+📌 FINAL VERDICT (already decided by deterministic code, do NOT change it, only explain it): {black_box_result.get("final_verdict")}
+📌 EVIDENCE THAT TRIGGERED THIS VERDICT (all non-SAFE categories): {json.dumps(black_box_result.get("evidence", {}), ensure_ascii=False)}
+
+📌 POSITIONING RULE: {bbox_note}
+📌 PDF TEXT BLOCKS WITH REAL BBOX (if available): {bbox_data}
+
+🚨 CITATION RULE (mandatory):
+- OK: cite as "đối chiếu với cơ sở dữ liệu tham chiếu đã biên soạn sẵn (cập nhật lần cuối {{date}})".
+- OK to cite a specific registration number ONLY if it is present in the evidence bundle above (i.e. came from a real lookup).
+- NEVER invent/hallucinate a registration or case number that is not in the evidence bundle.
+
+TASK A — POSITIONING: for each non-empty item in the EVIDENCE BUNDLE above, write one
+positioning_note: {{"category", "location_description", "citation"}}. Then write a short neutral
+"summary" of all evidence found.
+
+TASK B — REASONING + FIX: using the FINAL VERDICT and its triggering evidence above, write:
+1. `reasoning`: a clear paragraph explaining WHY this verdict was reached, referencing the evidence.
+2. `fix_suggestions`: if the triggering evidence is non-empty, one entry PER violation category,
+   each with a concrete, actionable fix (e.g. "Thay logo Nike bằng icon tự thiết kế riêng"). If
+   empty (fully SAFE), return an empty list.
+
+🌐 OUTPUT LANGUAGE: write "location_description", "citation", "summary", "reasoning", and every
+"suggestion" in professional, standard commercial Vietnamese (tiếng Việt chuẩn thương mại — clear,
+formal business tone, no slang). Keep "category" (Task A) and "violation" (Task B) EXACTLY as the
+category key they correspond to in the evidence above (English, e.g. "logo_similarity") — do NOT
+translate them, downstream code/UI matches on this exact string.
+
+🚨 OUTPUT RULES: ONE valid JSON object only, no markdown fences, exact keys only.
+
+REQUIRED JSON SHAPE:
+{{
+  "positioning_notes": [{{"category": "logo_similarity", "location_description": "góc trên-giữa thiết kế", "citation": "đối chiếu với cơ sở dữ liệu tham chiếu đã biên soạn sẵn"}}],
+  "summary": "tóm tắt trung lập, ngắn gọn về toàn bộ bằng chứng phát hiện được",
+  "reasoning": "đoạn giải thích lý do ra verdict, viết bằng tiếng Việt",
+  "fix_suggestions": [{{"violation": "logo_similarity", "suggestion": "cách sửa cụ thể, làm được ngay, viết bằng tiếng Việt"}}]
+}}"""
+    user_prompt = "Complete both tasks above — positioning synthesis, and reasoning/fix suggestions — based on the design image and the evidence/verdict above."
+    return system_prompt, user_prompt
+
+
+def run_synthesis_and_reasoning(
+    image_base64: "str | list[str] | None",
+    evidence_bundle: dict,
+    black_box_result: dict,
+    pdf_text_blocks: "list | None" = None,
+) -> dict:
+    """Điểm vào MỚI orchestrator.py gọi thay cho run_group_c_synthesis() + run_agent3_reasoning()
+    tuần tự — xem ghi chú khối trên. Output shape GIỮ NGUYÊN, gộp cả 4 field của 2 hàm gốc."""
+    system_prompt, user_prompt = _build_synthesis_and_reasoning_prompt(evidence_bundle, black_box_result, pdf_text_blocks)
+    raw = _call_llm_json(system_prompt, user_prompt, image_base64=image_base64, temperature=0.25)
+
+    notes = raw.get("positioning_notes") if isinstance(raw.get("positioning_notes"), list) else []
+    clean_notes = [
+        {"category": str(n.get("category", "")), "location_description": str(n.get("location_description", "")),
+         "citation": str(n.get("citation", ""))}
+        for n in notes if isinstance(n, dict)
+    ]
+    fixes = raw.get("fix_suggestions") if isinstance(raw.get("fix_suggestions"), list) else []
+    clean_fixes = [
+        {"violation": str(f.get("violation", "")), "suggestion": str(f.get("suggestion", ""))}
+        for f in fixes if isinstance(f, dict)
+    ]
+    return {
+        "positioning_notes": clean_notes,
+        "summary": str(raw.get("summary", "")),
+        "reasoning": str(raw.get("reasoning", "")),
+        "fix_suggestions": clean_fixes,
+    }
 
 
 # =====================================================================

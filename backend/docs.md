@@ -506,3 +506,49 @@ final_verdict: BLOCKED, reasoning + fix_suggestions (Agent 3) tự động bao p
 Xác nhận: bỏ cap KHÔNG đồng nghĩa tự động BLOCKED — vẫn phụ thuộc confidence gốc (low/medium/high)
 của Agent 1 + Agent 2 xác nhận, đúng tinh thần "Python quyết định số/threshold cứng" (CLAUDE.md
 mục 10), chỉ LOẠI BỎ giới hạn nhân tạo trước đây (KHÔNG BAO GIỜ được BLOCKED nếu unlisted).
+
+## 12. Tối ưu latency (gộp Nhóm C + Agent 3, giảm face crop) + taxonomy thật từ file mẫu BGK (2026-08-22)
+
+**Gộp Nhóm C + Agent 3 thành 1 LLM call** (`agents.py::run_synthesis_and_reasoning`, thay
+`run_group_c_synthesis()` + `run_agent3_reasoning()` gọi tuần tự trước đây) — cắt 1 round-trip
+LLM khỏi critical path. 2 hàm gốc GIỮ NGUYÊN trong code (không xoá, đánh dấu "không còn được
+orchestrator gọi trực tiếp"), output SHAPE của hàm gộp giống HỆT gộp 2 output cũ
+(`positioning_notes`/`summary`/`reasoning`/`fix_suggestions`) — `orchestrator.py`/`schemas.py`
+KHÔNG cần đổi gì ở tầng response. Khác biệt duy nhất: phần positioning giờ CŨNG thấy ảnh gốc
+(trước đây Nhóm C text-only) — chỉ có thể giúp chính xác hơn.
+
+**Giảm `_FACE_MAX_CROPS` 5 → 3** (`opencv_modules.py`) — ảnh đông người từng đẩy Agent 2 lên
+tới 6 ảnh/message (1 design + 5 face crop), nhánh nặng nhất pipeline. Chỉ đổi CAP số lượng gửi
+đi, không đụng threshold/config nào của thuật toán detect (giữ nguyên script gốc đã fine-tune).
+Trade-off: ảnh >3 mặt chỉ còn định danh/khoanh vùng 3 mặt điểm cao nhất.
+
+Verify thật (`Gen.G-banner.jpg`, ảnh nặng nhất đang có — 5 logo + text + nhiều mặt): 2 lần chạy
+cho 40.8s và 48.3s (trước đó user báo cáo 40-50s) — cải thiện có nhưng KHÔNG kịch tính trên ảnh
+nặng này, vì đây là worst-case (nhiều evidence → response dài → thời gian SINH TOKEN chiếm phần
+lớn, phần tiết kiệm được chỉ là overhead round-trip cố định của 1 request). Cải thiện dự kiến rõ
+hơn trên ảnh nhẹ/điển hình (ít category vi phạm → response ngắn → overhead round-trip chiếm tỷ
+trọng lớn hơn trong tổng thời gian). Output shape xác nhận KHÔNG đổi qua cả 2 lần chạy
+(`positioning_notes`/`reasoning`/`fix_suggestions` đầy đủ, không lỗi, không warning).
+
+**Taxonomy thật từ `design_samples_template.xlsx`** (30 dòng đáp án mẫu THẬT của BGK, không
+phải tự nghĩ) — trích `expected_niche`/`expected_sub_niche`/`expected_style`/`expected_motifs`
+đưa vào `niche_taxonomy.json`:
+- **12 niche mới** (`music_fan`, `sports_fan`, `celebrity`, `streetwear`, `cartoon`,
+  `alternative`, `tattoo_art`, `cultural_historical`, `political_social_commentary`,
+  `school_education`, `novelty`, `family_relationships`) — kèm sub_niches thật trích từ file.
+  `music_fan` chiếm 13/30 dòng — niche PHỔ BIẾN NHẤT trong bộ test thật, cần đặc biệt chú ý
+  (rủi ro tên nghệ sĩ/ban nhạc/cover album rất cao). Ghi chú giữ nguyên 1 điểm KHÔNG NHẤT QUÁN
+  thật trong file gốc BGK: "Tattoo Art" vừa là niche riêng vừa là sub_niche của "Alternative" ở
+  2 dòng khác nhau — KHÔNG tự ý sửa/gộp lại cho nhất quán, giữ đúng dữ liệu gốc.
+- **8 style mới** (`retro`, `minimalist`, `photographic`, `vintage`, `typographic`, `bold`,
+  `cartoon`, `grunge`) — BGK dùng style ĐƠN, KHÁC hẳn slug ghép của bộ 10 style cũ (vd
+  `vintage_retro` cũ vs `retro`+`vintage` tách riêng của BGK) — giữ CẢ HAI bộ song song.
+- **`motif_examples`** (field MỚI, tách biệt `global_dangerous_motifs` — đó vẫn là nhóm an
+  toàn/nguy hiểm riêng, không đổi) — 44 motif CHUNG CHUNG khái quát hoá từ cột `expected_motifs`
+  thật (đã bỏ tên riêng celeb/ban nhạc cụ thể — thuộc phạm vi suspected_celebrities/OCR_text,
+  không phải motif), tiêm vào prompt Agent 1 làm ví dụ tham khảo cho field `motifs`.
+
+Verify thật: prompt Agent 1 dry-run xác nhận đủ `music_fan` + ví dụ `band_name_text` trong
+system_prompt; test end-to-end (Gen.G banner) cho `style: "photographic"` — khớp ĐÚNG style đơn
+kiểu BGK thay vì slug ghép tự nghĩ trước đây (`photographic_professional`), xác nhận taxonomy
+mới đang thật sự ảnh hưởng lựa chọn của Vision.
