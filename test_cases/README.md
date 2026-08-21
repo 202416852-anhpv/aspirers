@@ -11,6 +11,9 @@ test2.png -- expected: SAFE
 # File .pdf:
 test3.pdf -- expected: BLOCKED
 
+# File .csv (batch test nhỏ):
+testing2.csv 
+
 # Link drive:
 https://drive.google.com/file/d/1it5W6ui84ZyG5aebiwyBegPja19T_HMw/view
 
