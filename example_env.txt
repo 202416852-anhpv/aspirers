@@ -1,0 +1,19 @@
+# Ví dụ file .env cho backend/ — copy nội dung này thành backend/.env rồi điền giá trị thật.
+# KHÔNG commit file .env thật (đã chặn ở .gitignore) — file này (example_env.txt) an toàn để
+# commit vì không chứa giá trị thật.
+
+# API key thật để gọi Claude Haiku 4.5 (lấy tại https://console.anthropic.com/settings/keys).
+# Chỉ GEMINI_API_KEY được config.py thực sự đọc — CLAUDE_API_KEY hiện KHÔNG được code nào đọc
+# (tên biến còn sót lại từ lúc đặt tên ban đầu), giữ lại 2 dòng cho đúng cấu trúc .env hiện tại.
+CLAUDE_API_KEY=sk-ant-api03-your-real-key-here
+GEMINI_API_KEY=sk-ant-api03-your-real-key-here
+
+# Endpoint tương thích OpenAI của Anthropic — KHÔNG đổi trừ khi biết rõ đang làm gì.
+GEMINI_BASE_URL=https://api.anthropic.com/v1/
+
+# Model thật đang chạy — Claude Haiku 4.5.
+GEMINI_MODEL=claude-haiku-4-5-20251001
+
+# Tuỳ chọn — có default sẵn trong config.py, chỉ cần khai báo nếu muốn đổi:
+# PORT=8000
+# ENVIRONMENT=development

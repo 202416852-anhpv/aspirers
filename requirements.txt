@@ -1,0 +1,38 @@
+# requirements.txt — BUP-02 AI Design Compliance Checker
+# Đã đối chiếu với import THẬT trong code (không copy nguyên bảng dự thảo cũ của CLAUDE.md —
+# vd đã bỏ pandas/pytrends vì không còn dùng, thêm openpyxl vì giờ đọc/ghi XLSX thật).
+# Version pin = đúng version ĐANG CÀI trên máy dev, đã chạy test thật (API key thật) qua
+# suốt quá trình build — không phải số đoán từ tài liệu.
+
+# --- Web framework ---
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32          # bắt buộc để FastAPI nhận UploadFile/Form (check-upload, batch-csv)
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.2              # pydantic-settings cần để đọc SettingsConfigDict(env_file=".env")
+
+# --- LLM client (Claude Haiku 4.5 qua endpoint tương thích OpenAI của Anthropic) ---
+openai==2.53.0
+
+# --- HTTP / Link fetching (Google Drive/Dropbox/S3, live trademark lookup) ---
+httpx==0.28.1
+
+# --- Ảnh / PDF ---
+pillow==12.2.0
+pymupdf==1.28.2                   # PDF -> ảnh + text layer thật (pdf_processor.py)
+
+# --- Batch CSV/XLSX ---
+openpyxl==3.1.5                   # đọc file .xlsx (kể cả ảnh dán trực tiếp vào cell) — csv_batch.py
+
+# --- JSON utilities (LLM đôi khi trả JSON hơi lỗi định dạng) ---
+json_repair==0.63.0
+
+# --- Bonus: PSD support (file_loader.py) ---
+psd-tools==1.18.0
+
+# --- OpenCV (opencv_modules.py — hiện là placeholder, cv2 import optional/try-except; bắt
+# buộc cài khi thành viên phụ trách match_character/match_logo/extract_fonts code thuật toán
+# thật). CHỈ giữ 1 trong 2 gói opencv — dùng contrib vì có sẵn cv2.dnn cho hướng ONNX embedding.
+opencv-contrib-python==4.10.0.84
+numpy==2.3.5

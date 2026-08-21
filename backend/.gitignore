@@ -1,0 +1,82 @@
+# =====================================================================
+# SECRETS — quan trọng nhất trong file này. KHÔNG bao giờ bỏ dòng .env.
+# .env đang chứa API key thật (CLAUDE_API_KEY/GEMINI_API_KEY, có thể cả USPTO_API_KEY
+# sau này) — tuyệt đối không để lọt vào git history dù chỉ 1 commit, vì sau đó dù xoá
+# file/rebase vẫn còn trong history trừ khi rewrite (rất dễ sai, và nếu đã push lên remote
+# thì coi như lộ vĩnh viễn). Xem ghi chú cuối file.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# =====================================================================
+# Python
+# =====================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Test / lint / type-check cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =====================================================================
+# compliance_checker/data/ — CỐ Ý KHÔNG ignore.
+# Đây là dữ liệu tham chiếu bắt buộc (niche taxonomy, blacklist, trademark list, policy,
+# trend, logo/character reference...) để app chạy được trên máy giám khảo — nếu gitignore
+# nhầm thư mục này, người clone repo về sẽ THIẾU DATA và app chạy sai/rỗng ngay từ đầu.
+# Bao gồm cả ảnh trong logo_refs//anime_character_refs/ khi có — vẫn PHẢI commit.
+# =====================================================================
+
+# Nếu sau này dùng model .onnx/.pt lớn (vd anime_feature_extractor.onnx) và git bắt đầu
+# nặng/chậm, cân nhắc Git LFS thay vì gitignore thẳng (gitignore sẽ làm app thiếu model
+# khi giám khảo clone) — để dòng dưới COMMENT SẴN, chỉ bật khi đã có LFS:
+# *.onnx filter=lfs diff=lfs merge=lfs -text
+# *.pt filter=lfs diff=lfs merge=lfs -text
+
+# =====================================================================
+# OS / Editor noise
+# =====================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =====================================================================
+# Node/Frontend (dự phòng nếu sau này thêm thư mục frontend/ trong cùng repo)
+# =====================================================================
+node_modules/
+dist/
+.next/
+.turbo/
+
+# =====================================================================
+# Runtime / logs / thư mục archive
+# =====================================================================
+*.log
+*.tmp
+
+# _archive_old_system/ CỐ Ý KHÔNG ignore — vẫn là source code thật (hệ marketing-copy
+# cũ), chỉ đang archive khỏi tầm mắt, không phải file rác/build artifact.

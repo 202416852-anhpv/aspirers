@@ -1,0 +1,16 @@
+{
+  "source": "Nice Classification (International Classification of Goods and Services, WIPO) - phiên bản edition 12-2026, tra cứu công khai tại https://www.wipo.int/classifications/nice/en/ - áp dụng đúng số lớp cho từng nhóm sản phẩm POD phổ biến để thu hẹp phạm vi khi query USPTO/EUIPO (chỉ cần match trademark ĐĂNG KÝ TRONG đúng lớp sản phẩm liên quan, giảm false positive từ nhãn hiệu trùng tên nhưng khác lĩnh vực).",
+  "last_updated": "2026-08-20",
+  "mapping": {
+    "apparel_design": {"nice_classes": [25], "note": "Áo thun, hoodie, mũ - Class 25 (Clothing)"},
+    "mug_sticker_design": {"nice_classes": [21], "note": "Mug, ly, đồ dùng nhà bếp - Class 21"},
+    "poster_wall_art": {"nice_classes": [16], "note": "Poster, in ấn giấy, sticker giấy - Class 16"},
+    "phone_case": {"nice_classes": [9], "note": "Phụ kiện điện tử - Class 9"},
+    "jewelry_accessory": {"nice_classes": [14], "note": "Trang sức - Class 14"},
+    "bag_tote": {"nice_classes": [18], "note": "Túi, ví, đồ da - Class 18"},
+    "home_decor_ornament": {"nice_classes": [20, 24], "note": "Đồ trang trí gỗ/acrylic (20), vải/rèm (24)"},
+    "toy_plush": {"nice_classes": [28], "note": "Đồ chơi, thú nhồi bông - Class 28"}
+  },
+  "fallback_default_classes": [16, 25],
+  "fallback_note": "Nếu niche không map được vào bảng trên (niche lạ Vision tự phát hiện, không thuộc 10 niche hardcoded), dùng fallback_default_classes (Class 16 in ấn + Class 25 apparel - 2 lớp phổ biến nhất trong POD) thay vì bỏ qua hẳn bước tra Nice Class."
+}

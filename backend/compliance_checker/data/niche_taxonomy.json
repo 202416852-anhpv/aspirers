@@ -1,0 +1,41 @@
+{
+  "source": "Tổng hợp thủ công từ kiến thức phổ biến về thị trường Print-on-Demand (Etsy/Amazon Merch/TikTok Shop) - KHÔNG phải crawl tự động, dùng làm điểm khởi đầu tiêm vào prompt Agent 1, Vision KHÔNG bị giới hạn chỉ trong danh sách này (xem compliance_checker/agents.py::_build_classify_prompt).",
+  "last_updated": "2026-08-20",
+  "niches": [
+    {"slug": "christmas_holiday", "label": "Christmas / Holiday Season", "note": "Ornament, sweater, mug theo mùa lễ Q4"},
+    {"slug": "dog_lovers", "label": "Dog Lovers / Pet Parent", "note": "Áo/mug/sticker theo giống chó, tên thú cưng"},
+    {"slug": "cat_lovers", "label": "Cat Lovers", "note": "Tương tự dog lovers, theo mèo"},
+    {"slug": "nurse_medical", "label": "Nurse / Medical Profession", "note": "Quote nghề y, ICU/ER nurse"},
+    {"slug": "fishing_hunting", "label": "Fishing & Hunting", "note": "Outdoor/hobby niche"},
+    {"slug": "anime_fandom", "label": "Anime & Manga Fandom", "note": "Rủi ro nhân vật bản quyền cao nhất"},
+    {"slug": "gym_fitness", "label": "Gym / Fitness Motivation", "note": "Quote động lực, không nhân vật"},
+    {"slug": "family_memorial", "label": "Family / Memorial / In Loving Memory", "note": "Personalization cao, ít rủi ro IP nhưng nhạy cảm nội dung"},
+    {"slug": "teacher_school", "label": "Teacher / Back to School", "note": "Quote nghề giáo, mùa tựu trường"},
+    {"slug": "gaming_esports", "label": "Gaming & Esports", "note": "Rủi ro logo game/nhân vật game cao"}
+  ],
+  "styles": [
+    {"slug": "vintage_retro", "label": "Vintage / Retro"},
+    {"slug": "minimalist_line_art", "label": "Minimalist Line Art"},
+    {"slug": "cartoon_chibi", "label": "Cartoon / Chibi"},
+    {"slug": "retro_90s", "label": "Retro 90s"},
+    {"slug": "watercolor", "label": "Watercolor"},
+    {"slug": "grunge_distressed", "label": "Grunge / Distressed"},
+    {"slug": "typography_quote", "label": "Typography / Quote-only"},
+    {"slug": "botanical_floral", "label": "Botanical / Floral"},
+    {"slug": "gothic_dark", "label": "Gothic / Dark Aesthetic"},
+    {"slug": "kawaii_cute", "label": "Kawaii / Cute"}
+  ],
+  "global_dangerous_motifs": {
+    "note": "Check UNIVERSAL, chạy bất kể niche detect ra có nằm trong danh sách niches ở trên hay không (xem CLAUDE.md muc 2.1 'Fallback niche ngoài hardcoded') - Agent 1 luôn phải quét các motif này.",
+    "motifs": [
+      "firearms_weapons",
+      "knives_blades_as_main_subject",
+      "drug_paraphernalia",
+      "hate_symbols_extremist_iconography",
+      "explicit_nudity_sexual_content",
+      "graphic_gore_violence",
+      "self_harm_suicide_imagery",
+      "terrorist_extremist_slogans"
+    ]
+  }
+}

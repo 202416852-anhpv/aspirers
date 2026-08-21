@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BUP-02 Compliance Checker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ============================= SIDEBAR ============================= -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <span class="brand-icon">🛡️</span>
+          <span class="brand-name">BUP-02 Checker</span>
+        </div>
+        <button class="new-check-btn" id="new-check-btn" type="button">
+          <span>+</span> Kiểm tra mới
+        </button>
+      </div>
+
+      <div class="session-list" id="session-list">
+        <p class="session-list-empty">Lịch sử các lượt kiểm tra trong phiên này sẽ hiện ở đây.</p>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="settings-btn" id="settings-btn" type="button">⚙️ Cài đặt</button>
+        <div class="health-indicator" id="health-indicator">
+          <span class="health-dot status-unknown" id="health-dot"></span>
+          <span id="health-text">chưa kiểm tra</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============================= MAIN PANEL ============================= -->
+    <main class="main-panel">
+      <header class="topbar">
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Menu">☰</button>
+        <div class="topbar-title">Design Compliance Checker</div>
+        <div class="topbar-meta">
+          <span id="topbar-platform-badge" class="meta-badge">platform: —</span>
+          <span id="topbar-country-badge" class="meta-badge">US</span>
+        </div>
+      </header>
+
+      <div class="message-thread" id="message-thread">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-state-icon">🛡️</div>
+          <h2>Kiểm tra 1 design hoặc cả batch</h2>
+          <p>Đính kèm ảnh/PDF, dán link Google Drive/Dropbox, hoặc upload CSV/XLSX để kiểm tra hàng loạt — không cần
+            biết trước format, hệ thống tự đoán.</p>
+          <div class="suggestion-chips">
+            <button class="suggestion-chip" data-suggest="upload">📎 Upload 1 ảnh design</button>
+            <button class="suggestion-chip" data-suggest="link">🔗 Dán link ảnh</button>
+            <button class="suggestion-chip" data-suggest="batch">📊 Batch CSV/XLSX</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================= COMPOSER ============================= -->
+      <footer class="composer-area">
+        <div class="composer-mode-tabs">
+          <button class="mode-tab active" data-mode="single" type="button">💬 Kiểm tra 1 design</button>
+          <button class="mode-tab" data-mode="batch" type="button">📊 Batch CSV/XLSX</button>
+        </div>
+
+        <div class="composer-chips" id="composer-chips"></div>
+
+        <div class="composer-box">
+          <button class="composer-icon-btn" id="attach-btn" type="button" title="Đính kèm file ảnh/PDF/PSD">📎</button>
+          <input type="file" id="file-input" accept=".png,.jpg,.jpeg,.webp,.bmp,.pdf,.psd" hidden />
+          <input type="file" id="batch-file-input" accept=".csv,.xlsx" hidden />
+
+          <input
+            type="text"
+            id="composer-text"
+            class="composer-text"
+            placeholder="Dán link Google Drive/Dropbox/URL ảnh, hoặc bấm 📎 để đính kèm file..."
+          />
+
+          <button class="composer-icon-btn send-btn" id="send-btn" type="button" title="Gửi">➤</button>
+        </div>
+
+        <div class="composer-hint" id="composer-hint">
+          Đúng 1 trong 2: đính kèm file HOẶC dán link. Mỗi lượt gửi tốn 1 lần gọi API thật.
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ============================= SETTINGS DRAWER ============================= -->
+  <div class="settings-overlay" id="settings-overlay" hidden>
+    <div class="settings-panel">
+      <div class="settings-panel-header">
+        <h3>Cài đặt</h3>
+        <button class="close-btn" id="settings-close-btn" type="button">✕</button>
+      </div>
+      <label class="settings-field">
+        Backend URL
+        <input type="text" id="backend-url" value="http://localhost:8000" />
+      </label>
+      <label class="settings-field">
+        Platform
+        <select id="platform">
+          <option value="">(không chọn)</option>
+          <option value="etsy">Etsy</option>
+          <option value="amazon">Amazon Merch</option>
+          <option value="tiktok">TikTok Shop</option>
+          <option value="shopify">Shopify</option>
+        </select>
+      </label>
+      <label class="settings-field">
+        Target country
+        <input type="text" id="target-country" value="US" />
+      </label>
+      <label class="settings-field">
+        Niche hint (tuỳ chọn, áp dụng cho lượt kiểm tra 1 design)
+        <input type="text" id="niche-hint" placeholder="vd: christmas_holiday" />
+      </label>
+      <button class="primary-btn" id="health-check-btn" type="button">Kiểm tra kết nối backend</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

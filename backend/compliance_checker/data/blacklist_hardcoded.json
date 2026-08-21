@@ -1,0 +1,23 @@
+{
+  "source": "Tổng hợp thủ công từ community guidelines công khai của Etsy/Amazon/TikTok Shop/Meta Ads (danh mục nội dung cấm phổ biến) - dùng làm keyword hint cho check text-based (OCR), việc nhận diện HÌNH ẢNH nhạy cảm vẫn do Vision model (Agent 1) đảm nhiệm, danh sách này chỉ là lớp lưới an toàn bổ sung cho phần chữ.",
+  "last_updated": "2026-08-20",
+  "categories": {
+    "nsfw": {
+      "keywords_en": ["nude", "naked", "explicit", "xxx", "porn", "sex toy", "onlyfans"],
+      "keywords_vi": ["khoả thân", "khỏa thân", "khiêu dâm", "nội dung 18+"]
+    },
+    "weapons_violence": {
+      "keywords_en": ["gun for sale", "buy ammo", "how to make a bomb", "assault rifle", "school shooting"],
+      "keywords_vi": ["chế tạo súng", "chế bom", "vũ khí tự chế"]
+    },
+    "drugs": {
+      "keywords_en": ["cocaine", "meth", "heroin", "buy weed online", "fentanyl"],
+      "keywords_vi": ["ma túy đá", "bán ma túy"]
+    },
+    "hate_discrimination": {
+      "keywords_en": ["white power", "kkk", "nazi salute", "ethnic slur"],
+      "keywords_vi": ["phân biệt chủng tộc", "kỳ thị"]
+    }
+  },
+  "note_for_dev": "Danh sách keyword ở đây CỐ TÌNH giữ ngắn/thận trọng - mục đích là bắt case rõ ràng qua text OCR, KHÔNG dùng làm nguồn duy nhất để quyết định BLOCKED (vẫn phải qua black_box.py threshold + reasoning của Agent 1/Nhóm C). Không liệt kê chi tiết hình ảnh/mô tả tường minh trong file này để tránh chính file này trở thành nội dung nhạy cảm."
+}

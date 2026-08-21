@@ -1,0 +1,58 @@
+# =====================================================================
+# ROOT .gitignore — áp dụng cho toàn bộ monorepo (backend/ + frontend/ + root).
+# Pattern không có dấu "/" (vd ".env") khớp ở MỌI cấp thư mục, nên các dòng SECRETS bên
+# dưới tự động bảo vệ luôn backend/.env dù không đứng ở đó — không cần lặp lại thủ công.
+# backend/ có thêm 1 .gitignore riêng, chi tiết hơn cho phần Python/compliance_checker —
+# 2 file không xung đột, git áp dụng CẢ HAI (cộng dồn, không file nào ghi đè file nào).
+# =====================================================================
+
+# =====================================================================
+# SECRETS — quan trọng nhất trong file này. KHÔNG bao giờ bỏ dòng .env.
+# .env đang chứa API key thật (CLAUDE_API_KEY/GEMINI_API_KEY) — tuyệt đối không để lọt vào
+# git history dù chỉ 1 commit (xoá file sau đó KHÔNG xoá được khỏi history, trừ khi rewrite;
+# nếu đã push lên remote thì coi như lộ vĩnh viễn). example_env.txt KHÔNG bị ignore (không
+# khớp pattern nào bên dưới) — đúng ý định, đó là file mẫu AN TOÀN để commit.
+# =====================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# =====================================================================
+# OS / Editor noise
+# =====================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =====================================================================
+# Node / frontend — frontend/ hiện là vanilla JS, không build step, không package.json,
+# nên chưa có gì để ignore thật sự — chỉ dự phòng nếu sau này thêm build tool.
+# =====================================================================
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+# =====================================================================
+# Python — backend/.gitignore đã có bản chi tiết hơn (venv, pytest cache...); đây chỉ là
+# lưới an toàn chung phòng khi có script Python nằm ngoài backend/ sau này.
+# =====================================================================
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# =====================================================================
+# Logs / runtime
+# =====================================================================
+*.log
+*.tmp

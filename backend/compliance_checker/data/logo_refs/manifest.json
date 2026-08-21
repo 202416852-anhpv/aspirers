@@ -1,0 +1,18 @@
+{
+  "source": "Khung danh sách brand phổ biến nhất trong rủi ro vi phạm logo POD - tổng hợp thủ công, KHÔNG kèm ảnh reference thật (xem note bên dưới).",
+  "last_updated": "2026-08-20",
+  "note_for_team": "Claude Code KHÔNG có khả năng tự sinh/tải file ảnh logo thật (.png) vào thư mục này trong phiên làm việc này - đây là phần dữ liệu NHỊ PHÂN cần 1 thành viên trong nhóm tự thu thập (chụp/tải logo chính thức từ trang thương hiệu) và đặt đúng tên file theo manifest bên dưới. opencv_modules.py::match_logo() hiện đang là PLACEHOLDER (xem file đó) - khi có ảnh thật, hàm đó cần bổ sung thuật toán so khớp (CLIP embedding hoặc feature matching) rồi mới đọc được các file trong manifest này.",
+  "brands": [
+    {"brand_name": "nike", "expected_file": "nike.png", "status": "missing_pending_upload"},
+    {"brand_name": "adidas", "expected_file": "adidas.png", "status": "missing_pending_upload"},
+    {"brand_name": "apple", "expected_file": "apple.png", "status": "missing_pending_upload"},
+    {"brand_name": "disney", "expected_file": "disney.png", "status": "missing_pending_upload"},
+    {"brand_name": "louis_vuitton", "expected_file": "louis_vuitton.png", "status": "missing_pending_upload"},
+    {"brand_name": "starbucks", "expected_file": "starbucks.png", "status": "missing_pending_upload"},
+    {"brand_name": "supreme", "expected_file": "supreme.png", "status": "missing_pending_upload"},
+    {"brand_name": "nfl", "expected_file": "nfl.png", "status": "missing_pending_upload"},
+    {"brand_name": "nba", "expected_file": "nba.png", "status": "missing_pending_upload"},
+    {"brand_name": "harley_davidson", "expected_file": "harley_davidson.png", "status": "missing_pending_upload"}
+  ],
+  "normalization_rule": "brand_name Agent 1 trả về -> lowercase, thay khoảng trắng bằng underscore, bỏ ký tự đặc biệt -> tra trong mảng brands[].brand_name ở trên -> nếu match và status=missing_pending_upload thì opencv_modules.match_logo() bỏ qua brand đó (không raise lỗi), giữ nguyên hành vi contract đã chốt trong CLAUDE.md muc 3."
+}
