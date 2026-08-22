@@ -1,6 +1,10 @@
-# File 10 testcase đã có báo cáo CSV:
-testing.xlsx 
-Report: report.csv
+# File 10 testcase (mẫu BTC) đã có báo cáo CSV:
+testing_design_template.xlsx 
+Report: report_final.csv
+
+# File 10 testcase nhóm chuẩn bị (3 loại SAFE RISKY BLOCKED):
+testing_custom.xlsx
+report_custom.csv
 
 # File .jpg:
 test1.jpg -- expected: BLOCKED
