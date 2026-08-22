@@ -1,18 +1,18 @@
-# Font Watchlist — Font thương mại hay bị dùng "chùa" trong POD
+# Font Watchlist — Commercial fonts commonly used without a license in POD
 
-*Source: tổng hợp thủ công từ kiến thức phổ biến ngành thiết kế POD (không phải crawl tự động từ MyFonts/Adobe Fonts). Last updated: 2026-08-20.*
+*Source: manually compiled from common knowledge in the Print-on-Demand design industry (not an automated crawl from MyFonts/Adobe Fonts). Last updated: 2026-08-20.*
 
-⚠️ **Giới hạn quan trọng** (đã thống nhất trong phiên brainstorm, xem `CLAUDE.md` mục 9.5): nhận diện CHÍNH XÁC tên font thương mại từ ảnh raster là bài toán chuyên biệt (kiểu WhatTheFont/Fontspring Matcherator), KHÔNG khả thi với Vision LLM thông thường ở mức tin cậy cao. Danh sách này chỉ dùng để agent viết `fix_suggestion` gợi ý đúng hướng ("có thể là 1 trong các font sau, cần kiểm tra license thủ công"), KHÔNG dùng để tự tin khẳng định đúng tên font.
+⚠️ **Important limitation** (agreed during the brainstorming session, see `CLAUDE.md` section 9.5): accurately identifying a commercial font's exact name from a raster image is a specialized problem (like WhatTheFont/Fontspring Matcherator) — NOT feasible with a general-purpose Vision LLM at high confidence. This list mainly helps the agent write a `fix_suggestion` pointing in the right direction ("this may be one of the following fonts — please verify the license manually"), not to confidently assert an exact font name.
 
-## Nhóm font hay bị vi phạm license nhất trong thiết kế POD
+## Font groups most often involved in POD license violations
 
-- **Script/Handwritten cao cấp**: Mishka, Sloop Script, Bickham Script Pro — hay bị dùng "chùa" cho thiệp/mug personalized.
-- **Display/Branding**: Gotham, Proxima Nova, Futura PT — thường yêu cầu license thương mại trả phí, hay bị nhầm là "free" vì trông giống các bản miễn phí (Montserrat, Poppins).
-- **Font gắn với 1 thương hiệu cụ thể** (rủi ro kép — vừa vi phạm font-license vừa gợi liên tưởng thương hiệu): kiểu chữ Disney (Waltograph), kiểu chữ Harry Potter (Harry P), kiểu chữ Coca-Cola script.
-- **Font "quote/motivational" phổ biến trên Etsy**: Amsterdam, Sweet Sunday Script — nhiều bản trôi nổi không rõ nguồn gốc license.
+- **Premium script/handwritten**: Mishka, Sloop Script, Bickham Script Pro — often used without a license for personalized cards/mugs.
+- **Display/branding**: Gotham, Proxima Nova, Futura PT — usually require a paid commercial license, often mistaken for "free" because they resemble free alternatives (Montserrat, Poppins).
+- **Fonts tied to a specific brand** (double risk — both a font-license violation and a brand association): the Disney typeface (Waltograph), the Harry Potter typeface (Harry P), the Coca-Cola script.
+- **Popular "quote/motivational" fonts on Etsy**: Amsterdam, Sweet Sunday Script — many copies circulating with unclear license provenance.
 
-## Cách agent nên xử lý (không phải nhận diện chính xác)
+## How the agent should handle this (approximate description, not exact identification)
 
-1. Mô tả kiểu chữ chung chung (vd "bold condensed sans-serif", "elegant script với đuôi chữ dài") — KHÔNG khẳng định tên font cụ thể trừ khi cực kỳ đặc trưng và rõ ràng.
-2. Luôn kèm disclaimer cố định (tiêm ở tầng orchestrator, xem `CLAUDE.md` mục 3): *"Font detection is best-effort. Recommend manual verification against font license databases (MyFonts, Adobe Fonts, Font Squirrel)."*
-3. Verdict do font gây ra tối đa dừng ở `RISKY`, không tự động `BLOCKED` (rủi ro false positive quá cao nếu chỉ dựa vào "trông giống").
+1. Describe the general letterform style (e.g. "bold condensed sans-serif", "elegant script with long letter tails") — do NOT assert a specific commercial font name unless it is extremely distinctive and unmistakable.
+2. Always include the fixed disclaimer (injected at the orchestrator layer, see `CLAUDE.md` section 3): *"Font detection is best-effort. Recommend manual verification against font license databases (MyFonts, Adobe Fonts, Font Squirrel)."*
+3. (2026-08-22, policy update) There is no reliable static name-list to cross-reference fonts against — verdict for this category depends entirely on the agent's own reasoning. Even without a confirmed database match, if the resemblance to a specific commercial/branded font is highly distinctive and the agent explains it thoroughly (which font, why it's confident), this can still escalate to BLOCKED — same policy as the other candidate categories (logo/character/artwork). The agent has the authority to flag it, provided the reasoning clearly states which font it resembles and explicitly recommends a quick manual license check, precisely because there is no database confirmation behind it.

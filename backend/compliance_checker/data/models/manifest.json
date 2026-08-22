@@ -1,12 +1,26 @@
 {
-  "source": "Do nguoi dung tai them thu cong vao du an (khong phai Claude tai) - MediaPipe BlazeFace short-range, model public chinh thuc cua Google (https://storage.googleapis.com/mediapipe-assets/blaze_face_short_range.tflite / https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector).",
-  "last_updated": "2026-08-21",
+  "source": "Do nguoi dung tai them thu cong vao du an (khong phai Claude tai) - MediaPipe BlazeFace short-range, model public chinh thuc cua Google (https://storage.googleapis.com/mediapipe-assets/blaze_face_short_range.tflite / https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector). Rieng yolov8n_logo.onnx/.pt: model TU HUAN LUYEN NOI BO boi thanh vien nhom (PyTorch + Ultralytics YOLOv8n), KHONG phai tai ve tu nguon public - xem chi tiet entry ben duoi.",
+  "last_updated": "2026-08-22",
   "models": [
     {
       "file": "blaze_face_short_range.tflite",
       "purpose": "Face DETECTION (khoanh vung mat trong anh) - dung qua cv2.dnn.readNetFromTFLite trong engine/opencv_modules.py::detect_and_crop_faces(). KHONG phai face-recognition/embedding - model nay CHI tra ve bounding box + score co mat hay khong, KHONG tra ve danh tinh. Danh tinh (suspected_name) do Agent 2 (Claude Vision) tu nhan dien truc tiep tren anh crop, KHONG dung database/embedding matching sinh trac hoc nao ca.",
       "architecture": "BlazeFace short-range, input 128x128 RGB normalize [-1,1], output 2 tensor (classificators, regressors) voi 896 anchor.",
       "size_bytes": 229746
+    },
+    {
+      "file": "yolov8n_logo.onnx",
+      "purpose": "Logo REGION detection (khoanh vung 'trong nhu logo' trong anh) - dung qua cv2.dnn.readNetFromONNX trong engine/opencv_modules.py::detect_logo_regions(), duoc match_logo() goi lai de ghep voi ten brand Agent 1/Vision da doan. Day la ban ONNX xuat tu yolov8n_logo.pt de suy luan (inference) KHONG can torch/ultralytics o runtime - chi can opencv-contrib-python da co san.",
+      "architecture": "Ultralytics YOLOv8n, exported opset 19, input 640x640 RGB normalize [0,1], output (1,5,8400) - 1 class duy nhat 'logo' (khong phan loai brand).",
+      "training": "Tu huan luyen noi bo boi thanh vien nhom bang PyTorch (ultralytics), fine-tune threshold rieng cho bai toan phat hien logo tren thiet ke POD - CHUA duoc benchmark chinh thuc tren bo test cua he thong nay, nguong confidence (_LOGO_SCORE_THRESH=0.25) dang tam dung theo mac dinh nguoi dung tu test qua test_logo.py.",
+      "export_date": "2026-08-21T23:20:05+07:00",
+      "size_bytes": 12265216
+    },
+    {
+      "file": "yolov8n_logo.pt",
+      "purpose": "Checkpoint PyTorch GOC cua yolov8n_logo.onnx - giu lai de tham khao/huan luyen tiep, KHONG duoc code nao trong engine/ load truc tiep (runtime chi dung ban .onnx qua cv2.dnn, tranh phu thuoc torch/ultralytics).",
+      "training": "Cung nguon voi yolov8n_logo.onnx (xem entry tren) - day la checkpoint truoc khi export ONNX.",
+      "size_bytes": 6242339
     }
   ]
 }

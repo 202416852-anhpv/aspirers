@@ -46,6 +46,10 @@ export function ResultCard({ result: r, grading, previewUrl = null }: ResultCard
           {r.niche}
         </div>
         <div>
+          <div className="meta-label">Sub-niche</div>
+          {r.sub_niche || "—"}
+        </div>
+        <div>
           <div className="meta-label">Style</div>
           {r.style}
         </div>
@@ -71,6 +75,16 @@ export function ResultCard({ result: r, grading, previewUrl = null }: ResultCard
         Người nổi tiếng nghi ngờ <span className="empty-note">(✅/❌ = Agent 2 đã kiểm tra lại ảnh)</span>
       </div>
       <SuspectChipList items={r.suspected_celebrities} category="celebrity" verifications={r.verifications} />
+
+      <div className="section-title">
+        Font nghi ngờ <span className="empty-note">(✅/❌ = Agent 2 đã kiểm tra lại ảnh — best-effort, xem font_disclaimer)</span>
+      </div>
+      <SuspectChipList items={r.suspected_fonts.map((f) => ({ name: f.font_name_guess, confidence: f.confidence }))} category="font" verifications={r.verifications} />
+
+      <div className="section-title">
+        Tác phẩm/franchise nghi ngờ <span className="empty-note">(✅/❌ = Agent 2 đã kiểm tra lại ảnh)</span>
+      </div>
+      <SuspectChipList items={r.suspected_artworks.map((a) => ({ name: a.artwork_name, confidence: a.confidence }))} category="artwork" verifications={r.verifications} />
 
       <div className="section-title">OCR text</div>
       <div className="ocr-box">{r.OCR_text || "(không có chữ)"}</div>

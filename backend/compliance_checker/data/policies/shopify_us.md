@@ -1,11 +1,14 @@
-[Shopify — US Market — Intellectual Property Policy Summary]
+[Shopify — US Market — Acceptable Use & Merchant Terms Policy Summary]
 
-Source: help.shopify.com/en/manual/compliance/intellectual-property, shopify.com/legal/tools/report-an-issue/trademark-infringement — tổng hợp công khai, last_updated: 2026-08-20.
+Source: https://www.shopify.com/legal/aup (Acceptable Use Policy), https://www.shopify.com/legal/terms (Merchant Terms of Service) — compiled from public content, last_updated: 2026-08-22.
 
-- Shopify tuân thủ DMCA cho khiếu nại BẢN QUYỀN (copyright) — có quy trình riêng, tách biệt, cho khiếu nại TRADEMARK (DMCA không bao phủ trademark, đây là điểm khác biệt pháp lý quan trọng cần đúng khi agent giải thích cho user).
-- Khi nhận report hợp lệ: Shopify gỡ nội dung vi phạm khỏi store, thông báo cho merchant qua Shopify admin.
-- Khác biệt lớn nhất so với Etsy/Amazon/TikTok: Shopify là nền tảng "cấp hạ tầng" (mỗi store là website riêng của seller), không phải marketplace tập trung — nên kiểm duyệt CHỦ ĐỘNG (proactive scanning) của Shopify YẾU HƠN các sàn marketplace tập trung, phần lớn dựa vào report từ bên thứ 3 (reactive), không tự động quét toàn bộ store.
-- Vi phạm lặp lại (repeat infringer) có thể bị hạn chế store hoặc chấm dứt hợp đồng (terminate).
-- Nộp report sai/có ác ý (false or bad-faith IP claim) có thể bị kiện ngược lại — Shopify có cơ chế bảo vệ merchant khỏi report gian lận.
+- Acceptable Use Policy — Intellectual Property (Risk: Critical) — Shopify prohibits store owners from hosting, uploading, or distributing any content that infringes a third party's copyright, trademark, or other IP rights.
+  - Avoid: using a proprietary brand's logo/imagery in storefront theme or product images; selling apparel/products printed with stolen-copyright artwork; using a store/domain name containing a trademarked keyword (e.g. `nike-store-online.myshopify.com`).
+  - Safer: every image/artwork asset on the site and products is self-authored or carries a clear commercial-use license.
+  - Enforcement: content removal, takedown notice, store suspension, termination of services.
+- Merchant Terms of Service & Sales Channel Compliance (Risk: High) — merchants must comply with applicable law AND the policies of any connected sales channel (Google Shopping, Facebook/Instagram Shop, TikTok Shop); a violation on a connected channel can affect the store's channel connection.
+  - Avoid: product/site content that violates a connected channel's ad policy (Google/Meta/TikTok); selling counterfeits through Shopify Payments.
+  - Safer: transparent product provenance and consistent image copyright across the store and every distribution channel.
+  - Enforcement: sales-channel disconnect, Shopify Payments lockout, store termination.
 
-Gợi ý cho Agent 4: Shopify có rủi ro bị PHÁT HIỆN chủ động THẤP HƠN các sàn marketplace (do kiểm duyệt reactive, không proactive) — nhưng đây KHÔNG đồng nghĩa an toàn hơn về mặt pháp lý, chỉ là xác suất bị bắt sớm thấp hơn. Agent 4 KHÔNG được diễn giải điều này thành "khuyến khích vi phạm trên Shopify vì ít bị kiểm duyệt" — chỉ nêu sự khác biệt cơ chế, verdict compliance vẫn phải dựa trên rủi ro pháp lý thực, không phải xác suất bị phát hiện.
+Guidance for Agent 4 (market/platform suggestion): Shopify is best when the seller wants to build their OWN brand/store rather than rely on marketplace discovery — it requires the seller to drive their own traffic (ads/social/influencers). Best fit for niches with strong repeat-purchase or brand-building potential, not a one-off marketplace impulse buy; IP enforcement here is largely reactive (complaint-driven) rather than proactive automated scanning, but violating a CONNECTED sales channel's policy (e.g. running the same infringing design as a TikTok/Meta ad) still carries real risk.

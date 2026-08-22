@@ -1,10 +1,10 @@
 """
-compliance_checker/engine/opencv_modules.py — 4 nhóm hàm khác trạng thái:
+compliance_checker/engine/opencv_modules.py — các nhóm hàm khác trạng thái:
 
-  1. PLACEHOLDER (match_character, match_logo, extract_fonts): cần embedding/model + ảnh
-     reference thật (anime_character_refs/, logo_refs/) — nhóm đã QUYẾT ĐỊNH BỎ hướng này
+  1. PLACEHOLDER (match_character, extract_fonts): cần embedding/model + ảnh reference thật
+     (anime_character_refs/) hoặc model phân loại font riêng — nhóm đã QUYẾT ĐỊNH BỎ hướng này
      (quá khó trong thời gian hackathon, xem ghi chú trong từng hàm). KHÔNG tự ý code lại
-     thuật toán bên trong 3 hàm này — giữ nguyên đúng contract shape của CLAUDE.md mục 3 để
+     thuật toán bên trong 2 hàm này — giữ nguyên đúng contract shape của CLAUDE.md mục 3 để
      orchestrator.py vẫn gọi được, luôn trả rỗng.
   2. VẪN HOẠT ĐỘNG NHƯNG KHÔNG CÒN ĐƯỢC GỌI (detect_text_regions, 2026-08-21): MSER-based,
      chỉ khoanh vùng "trông giống chữ" (hình học thuần, KHÔNG đọc nội dung). Đã bị THAY THẾ
@@ -18,16 +18,29 @@ compliance_checker/engine/opencv_modules.py — 4 nhóm hàm khác trạng thái
      (Claude Vision) tự nhận diện trực tiếp — xem agents.py::run_agent2_verify_candidates.
      Toàn bộ threshold/config port NGUYÊN VẸN từ script gốc người dùng cung cấp
      (crop_face_blazeface.py, đã tự fine-tune trên nhiều ảnh thật) — KHÔNG chỉnh lại số.
-  4. ĐANG HOẠT ĐỘNG THẬT (extract_text_blocks, 2026-08-21): OCR THẬT (RapidOCR/ONNX, khác hẳn
-     detect_text_regions ở mục 2 — đọc được NỘI DUNG chữ, không chỉ khoanh vùng) + tự gộp các
-     box chữ rời rạc thành block/line theo hình học (cùng font size, cùng hàng...). Port từ
-     script gốc người dùng cung cấp (test_ocr.py) — bỏ phần ghi crop ảnh ra đĩa (không cần,
-     pipeline chỉ cần TEXT + bbox, xem agents.py TASK 3 + lý do quyết định trong docs.md).
+  4. ĐANG HOẠT ĐỘNG THẬT (extract_text_blocks, 2026-08-22, NỐI LẠI): OCR THẬT (RapidOCR/ONNX,
+     khác hẳn detect_text_regions ở mục 2 — đọc được NỘI DUNG chữ, không chỉ khoanh vùng) + tự
+     gộp các box chữ rời rạc thành block/line theo hình học (cùng font size, cùng hàng...). Port
+     từ script gốc người dùng cung cấp (test_ocr.py) — bỏ phần ghi crop ảnh ra đĩa (không cần,
+     pipeline chỉ cần TEXT + bbox, xem agents.py TASK 3 + lý do quyết định trong docs.md). Từng
+     bị RÚT khỏi orchestrator.py (nghi ngờ tốn RAM trên Render) — 2026-08-22 NỐI LẠI theo yêu
+     cầu người dùng ("không quan tâm RAM/timeout nữa, tối ưu hết mức có thể").
+  5. ĐANG HOẠT ĐỘNG THẬT (detect_logo_regions + match_logo, 2026-08-22, MỚI TÍCH HỢP): model
+     YOLOv8n (best.onnx, do người dùng tự huấn luyện bằng PyTorch/ultralytics — xem
+     data/models/manifest.json) chạy qua cv2.dnn.readNetFromONNX — KHÔNG cần cài torch/
+     ultralytics ở runtime, chỉ cần opencv-contrib-python đã có sẵn (đúng định hướng CLAUDE.md
+     mục 7: "CHỈ giữ torch nếu dùng hướng CLIP embedding", ở đây dùng ONNX thuần). Model chỉ có
+     1 class duy nhất ("logo", xem metadata `names={0:'logo'}` trong best.onnx) — tức đây là bộ
+     phát hiện VÙNG "trông như logo" (region proposal chuyên biệt, tương tự vai trò BlazeFace
+     cho mặt người), KHÔNG tự phân loại logo đó là brand gì. match_logo() ghép kết quả vùng
+     phát hiện (sắp theo confidence giảm dần) với suspected_logos do Agent 1/Vision đã đoán tên
+     (cũng đã ưu tiên confidence cao nhất) theo THỨ TỰ — cách ghép heuristic hợp lý duy nhất khi
+     model chỉ trả về "có/không có logo ở đây", không trả về tên brand.
 
 Nguyên tắc chung mọi hàm trong file: nhận image_path (string), trả dict JSON-serializable,
 KHÔNG BAO GIỜ raise exception ra ngoài (đọc ảnh lỗi/thiếu file vẫn trả rỗng đúng shape).
 
-pip install opencv-contrib-python numpy rapidocr_onnxruntime (đã có sẵn trong hệ thống hiện tại)
+pip install opencv-contrib-python numpy rapidocr_onnxruntime (đã có sẵn trong requirements.txt)
 """
 
 import base64
@@ -83,25 +96,37 @@ def match_character(image_path: str) -> dict:
     return {"matches": []}
 
 
-def match_logo(image_path: str, suspected_logos: dict) -> dict:
+def match_logo(image_path: str, suspected_logos: dict, _precomputed_regions: "list | None" = None) -> dict:
     """
     Input suspected_logos: {"suspected_logos": [{"brand_name": str, "confidence": str}, ...]}
     Output: {"matches": [{"brand_name": str, "confidence": float}, ...]}
-    Số lượng = số brand_name có ảnh reference hợp lệ trong logo_refs/manifest.json —
-    KHÔNG tự quét toàn manifest nếu input rỗng.
 
-    ⚠️ PLACEHOLDER — logo_refs/ hiện chưa có ảnh thật (chỉ có manifest.json mô tả brand
-    nào CẦN ảnh), nên hàm này luôn trả rỗng cho tới khi có ảnh + thuật toán so khớp thật.
+    ✅ ĐANG HOẠT ĐỘNG THẬT (2026-08-22) — dùng detect_logo_regions() (YOLOv8n ONNX, xem mục 5
+    của module docstring) để tìm CÁC VÙNG thật sự "trông như logo" trong ảnh, rồi ghép với
+    brand_list theo THỨ TỰ (cả 2 đều đã sắp confidence giảm dần) — vì model chỉ có 1 class
+    "logo" (không phân loại brand), đây là cách duy nhất tận dụng được tín hiệu detection thật
+    mà vẫn trả đúng shape "brand_name" theo hợp đồng CLAUDE.md mục 3. Số lượng match =
+    min(số vùng phát hiện được, số brand Agent 1 nghi ngờ) — KHÔNG tự bịa thêm match cho brand
+    dư ra nếu không có vùng nào hỗ trợ.
+
+    _precomputed_regions: (tối ưu nội bộ, KHÔNG phải tham số của contract CLAUDE.md gốc) —
+    orchestrator.py có thể tự chạy detect_logo_regions() trước (song song Agent 1, giống
+    face_crop_task) rồi truyền thẳng vào đây để tránh forward-pass ONNX 2 lần trên cùng 1 ảnh.
+    None (mặc định) -> hàm tự gọi detect_logo_regions(image_path), vẫn dùng độc lập được y hệt
+    behavior cũ nếu gọi trực tiếp không qua orchestrator.
     """
-    img = _safe_imread(image_path)
     brand_list = (suspected_logos or {}).get("suspected_logos", [])
-    if img is None or not brand_list:
+    if not brand_list:
         return {"matches": []}
-    # TODO(dev OpenCV): với mỗi brand_name trong brand_list, chuẩn hoá tên (lowercase,
-    # space->underscore, bỏ ký tự đặc biệt), tra logo_refs/manifest.json — nếu file ảnh
-    # reference tồn tại thật, so khớp (CLIP embedding hoặc feature matching ORB/SIFT) và
-    # trả confidence float 0-100. Brand không có ảnh reference -> bỏ qua, KHÔNG raise lỗi.
-    return {"matches": []}
+    regions = _precomputed_regions if _precomputed_regions is not None else detect_logo_regions(image_path).get("logo_regions", [])
+    if not regions:
+        return {"matches": []}
+    matches = []
+    for region, brand in zip(regions, brand_list):  # cả 2 đã sắp confidence giảm dần -> ghép theo cặp
+        brand_name = str((brand or {}).get("brand_name", "")).strip()
+        if brand_name:
+            matches.append({"brand_name": brand_name, "confidence": region["confidence"]})
+    return {"matches": matches}
 
 
 def extract_fonts(image_path: str) -> dict:
@@ -466,6 +491,126 @@ def detect_and_crop_faces(image_path: str, max_faces: int = _FACE_MAX_CROPS) -> 
         return {"faces": out}
     except Exception:
         return {"faces": []}
+
+
+# =====================================================================
+# LOGO REGION DETECTION (YOLOv8n ONNX) — 2026-08-22, tích hợp best.onnx (do người dùng tự
+# huấn luyện bằng PyTorch/ultralytics, fine-tune riêng cho bài toán phát hiện logo trên thiết
+# kế POD — xem data/models/manifest.json). Suy luận qua cv2.dnn.readNetFromONNX, KHÔNG cần
+# torch/ultralytics ở runtime (đúng CLAUDE.md mục 7). Model 1 class duy nhất ("logo") — đây là
+# region detector chuyên biệt (tìm "vùng nào trông như logo"), KHÔNG phân loại brand — việc gán
+# tên brand cho từng vùng do match_logo() ở trên đảm nhiệm (ghép với suspected_logos của Agent1).
+# =====================================================================
+
+_LOGO_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "models", "yolov8n_logo.onnx")
+_LOGO_INPUT_SIZE = 640            # đúng imgsz export trong metadata best.onnx (imgsz=[640,640])
+_LOGO_SCORE_THRESH = 0.25         # khớp mặc định conf=0.25 trong test_logo.py gốc (chưa có dữ
+                                   # liệu đo phân bố điểm số thật trên nhiều ảnh như BlazeFace ở
+                                   # trên -> giữ nguyên số người dùng đã tự dùng khi test model).
+_LOGO_IOU_THRESH = 0.45           # ngưỡng NMS mặc định chuẩn YOLOv8 (Ultralytics predict() default)
+_LOGO_MAX_REGIONS = 5             # top N vùng điểm cao nhất — cùng cỡ với _FACE_MAX_CROPS
+
+_LOGO_NET_CACHE = None    # lazy-load 1 lần cho cả process, giống pattern _get_face_net()
+_LOGO_NET_LOAD_FAILED = False
+
+
+def _get_logo_net():
+    global _LOGO_NET_CACHE, _LOGO_NET_LOAD_FAILED
+    if _LOGO_NET_CACHE is not None or _LOGO_NET_LOAD_FAILED:
+        return _LOGO_NET_CACHE
+    try:
+        _LOGO_NET_CACHE = cv2.dnn.readNetFromONNX(_LOGO_MODEL_PATH)
+    except Exception:
+        _LOGO_NET_LOAD_FAILED = True
+        _LOGO_NET_CACHE = None
+    return _LOGO_NET_CACHE
+
+
+def _logo_letterbox(image, size=640):
+    """Resize giữ tỷ lệ rồi pad thành hình vuông size x size (pad giữa) — cùng kỹ thuật
+    _face_letterbox() ở trên, dùng lại độc lập vì khác input size (640 vs 128)."""
+    h, w = image.shape[:2]
+    scale = size / max(h, w)
+    new_w, new_h = int(round(w * scale)), int(round(h * scale))
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    pad_w, pad_h = size - new_w, size - new_h
+    top, bottom = pad_h // 2, pad_h - pad_h // 2
+    left, right = pad_w // 2, pad_w - pad_w // 2
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right,
+                                 cv2.BORDER_CONSTANT, value=(114, 114, 114))  # 114 = padding xám chuẩn Ultralytics
+    return padded, scale, left, top
+
+
+def detect_logo_regions(image_path: str, max_regions: int = _LOGO_MAX_REGIONS) -> dict:
+    """
+    Output: {"logo_regions": [{"bbox": [x0,y0,x1,y1], "bbox_norm": [nx0,ny0,nx1,ny1], "confidence": float}, ...]}
+    Tối đa max_regions phần tử (mặc định 5), sắp xếp confidence giảm dần (0-100). Ảnh lỗi/không
+    đọc được/model chưa sẵn sàng/không phát hiện gì: {"logo_regions": []}.
+
+    ⚠️ Đây CHỈ là region DETECTION ("có vùng nào trông như logo ở đây") — model best.onnx chỉ có
+    1 class ("logo"), KHÔNG tự phân loại đây là logo brand nào. Việc gán tên brand do
+    match_logo() đảm nhiệm (ghép thứ tự với suspected_logos của Agent 1/Vision).
+    """
+    img = _safe_imread(image_path)
+    if img is None:
+        return {"logo_regions": []}
+    net = _get_logo_net()
+    if net is None:
+        return {"logo_regions": []}
+    try:
+        h_orig, w_orig = img.shape[:2]
+        padded, scale, pad_x, pad_y = _logo_letterbox(img, _LOGO_INPUT_SIZE)
+
+        blob = cv2.dnn.blobFromImage(padded, scalefactor=1 / 255.0,
+                                      size=(_LOGO_INPUT_SIZE, _LOGO_INPUT_SIZE), swapRB=True, crop=False)
+        net.setInput(blob)
+        output = net.forward()  # Ultralytics YOLOv8 ONNX (nms=False khi export): shape (1, 4+nc, num_anchors)
+
+        preds = output[0].T  # (num_anchors, 4+nc) — nc=1 -> (num_anchors, 5): cx,cy,w,h,score
+        scores = preds[:, 4]
+        keep = scores > _LOGO_SCORE_THRESH
+        if not np.any(keep):
+            return {"logo_regions": []}
+        preds = preds[keep]
+        scores = scores[keep]
+
+        # box coords từ output đã ở pixel-space của ảnh 640x640 ĐÃ letterbox (KHÔNG chuẩn hoá
+        # [0,1] như BlazeFace) — chuẩn xuất ONNX của Ultralytics YOLOv8.
+        cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+        x1 = cx - bw / 2
+        y1 = cy - bh / 2
+        nms_boxes = np.stack([x1, y1, bw, bh], axis=1).tolist()
+        idxs = cv2.dnn.NMSBoxes(nms_boxes, scores.tolist(), _LOGO_SCORE_THRESH, _LOGO_IOU_THRESH)
+        if len(idxs) == 0:
+            return {"logo_regions": []}
+        idxs = np.array(idxs).flatten()
+
+        results = []
+        for i in idxs:
+            bx1, by1, bw_i, bh_i = nms_boxes[i]
+            bx2, by2 = bx1 + bw_i, by1 + bh_i
+            # bỏ pad + chia lại theo scale để về toạ độ ảnh GỐC (giống _face_detect_in_region)
+            bx1 = (bx1 - pad_x) / scale
+            by1 = (by1 - pad_y) / scale
+            bx2 = (bx2 - pad_x) / scale
+            by2 = (by2 - pad_y) / scale
+            bx1 = max(0.0, bx1); by1 = max(0.0, by1)
+            bx2 = min(float(w_orig), bx2); by2 = min(float(h_orig), by2)
+            if bx2 > bx1 and by2 > by1:
+                results.append((bx1, by1, bx2, by2, float(scores[i])))
+
+        results.sort(key=lambda r: r[4], reverse=True)  # confidence giảm dần
+        out = []
+        for (x1, y1, x2, y2, score) in results[:max_regions]:
+            out.append({
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "bbox_norm": [round(x1 / w_orig, 4), round(y1 / h_orig, 4), round(x2 / w_orig, 4), round(y2 / h_orig, 4)],
+                "confidence": round(score * 100, 1),
+            })
+        return {"logo_regions": out}
+    except Exception:
+        return {"logo_regions": []}
 
 
 # =====================================================================

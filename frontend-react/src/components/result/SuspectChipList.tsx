@@ -6,8 +6,8 @@
 import type { VerificationItem } from "../../api/types";
 
 export interface SuspectChipListProps {
-  items: { name: string; confidence: string }[]; // đã chuẩn hoá brand_name/name -> name ở ResultCard
-  category: "logo" | "character" | "celebrity";
+  items: { name: string; confidence: string }[]; // đã chuẩn hoá brand_name/name/font_name_guess/artwork_name -> name ở ResultCard
+  category: "logo" | "character" | "celebrity" | "font" | "artwork";
   verifications: VerificationItem[];
 }
 

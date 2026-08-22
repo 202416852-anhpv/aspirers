@@ -389,3 +389,184 @@ production khác.
 - `main.py`: `from compliance_checker.api.routes import router as compliance_router` (thay 3 import cũ + 4 hàm route).
 - `engine/agents.py` (config.py/knowledge_loader.py): KHÔNG đổi — 2 import này resolve qua
   `sys.path` (chạy từ `backend/`), không phụ thuộc `agents.py` nằm sâu bao nhiêu cấp.
+
+## 10. Prompt tiếng Anh + output tiếng Việt + Agent 2 TASK 3 dùng OCR thô + Agent 4 giảm thiên hướng Etsy (2026-08-22)
+
+**Prompt (system_prompt/user_prompt gửi LLM) toàn bộ chuyển sang tiếng Anh** — trước đây Agent 4
+là agent DUY NHẤT có phần Vietnamese lẫn trong prompt (`selected_combo_header`/`selected_combo_task`),
+cộng với marker "--- Trang N/M ---" (đánh dấu trang PDF nhiều trang, `_build_messages()`) — cả 2 đã
+đổi sang tiếng Anh. Agent 1/2/3/Nhóm C vốn đã 100% tiếng Anh từ trước, không cần đổi thân prompt.
+
+⚠️ Phát hiện thêm khi rà: **nội dung 5 file `data/policies/*.md` + `data/trends/us_trends.md` —
+được TIÊM THẲNG vào system_prompt của Agent 4 — hoàn toàn bằng tiếng Việt** (phần lớn dung lượng
+prompt thật sự, nhiều hơn hẳn phần code tự viết). Đã dịch cả 5 file sang tiếng Anh, giữ nguyên
+100% nội dung/số liệu/nguồn (`source`/`last_updated` không đổi) — chỉ dịch câu chữ.
+
+**Output (giá trị trong JSON model trả về) giờ enforce tiếng Việt chuẩn thương mại** — thêm khối
+`🌐 OUTPUT LANGUAGE` vào OUTPUT RULES của Agent 2/Nhóm C/Agent 3/Agent 4, liệt kê RÕ field nào phải
+tiếng Việt (mọi field prose tự do: `reasoning`, `location_description`, `citation`, `summary`,
+`suggestion`, `rationale`) và field nào PHẢI giữ nguyên (enum cố định `"low"/"medium"/"high"`,
+`category`/`violation` — khớp key evidence bundle Python dùng để tra cứu, `top_platform_suggestion`/
+`top_country_suggestion` — identifier/mã nước, tên riêng brand/character/celebrity, và `phrase` —
+trích dẫn nguyên văn từ OCR_text, KHÔNG dịch nội dung đang trích dẫn). Agent 1 không cần đổi —
+không có field prose tự do nào (niche/style/motifs là slug, OCR_text bắt buộc verbatim theo đúng
+ngôn ngữ gốc trên thiết kế).
+
+**Agent 2 TASK 3 (trademark/slogan sense-check) đổi nguồn input**: trước dùng
+`opencv_modules.extract_text_blocks()` (RapidOCR, indexed blocks + bbox thật) — RapidOCR đã bị RÚT
+khỏi flow thật (nghi OOM crash trên Render, xem mục "Điều chưa làm"/lịch sử session). Giờ dùng
+THẲNG `classify["OCR_text"]` (Agent 1 tự OCR bằng Vision, 1 chuỗi thô, không bbox) — đủ cho task
+NGÔN NGỮ thuần tuý này. Mất bbox → `_build_flagged_regions()` không còn khoanh vùng được cho
+flag loại này trên ảnh gốc (vẫn ảnh hưởng verdict/reasoning bình thường qua black_box.py).
+
+Xác nhận lại + siết chặt yêu cầu **"nghi ngờ cao dù không có trong database vẫn BLOCKED"** (đã có
+từ trước, KHÔNG đổi logic `black_box.py::score_trademark_text_llm_sense`) — bổ sung PROMPT bắt
+buộc: khi `suspicion="high"`, `reasoning` PHẢI (a) nêu rõ nghi là thương hiệu/tác phẩm nào và vì
+sao, (b) khuyến nghị kiểm chứng thủ công nhanh (USPTO/EUIPO/tìm kiếm web) — vì đây là phán đoán
+AI, KHÔNG phải kết quả database đã xác minh. Verify THẬT (API key thật, không mock):
+```
+input:  OCR_text = "JUST DO IT - Best Coffee Mug Ever - Grade A Ceramic", KHÔNG có candidate nào
+output: {"phrase": "JUST DO IT", "suspicion": "high",
+         "reasoning": "Đây là slogan nổi tiếng toàn cầu của thương hiệu Nike... Mặc dù chưa có kết
+                        quả khớp từ database tự động, mức độ nhận diện cao của slogan này đòi hỏi
+                        phải kiểm chứng nhanh thủ công qua USPTO, EUIPO hoặc tìm kiếm web..."}
+→ black_box.score_trademark_text_llm_sense(...) → tag = "BLOCKED"  ✅ đúng như thiết kế
+```
+
+**Agent 4 — giảm thiên hướng gợi ý Etsy + tối ưu reasoning cho quốc gia thiếu data**: thêm khối
+`PLATFORM FIT CRITERIA` (tiêu chí phân biệt cụ thể 4 platform theo hành vi mua hàng thật — Etsy:
+personalized/gift/curated; Amazon: mass-market/keyword-search; TikTok: trend/meme/video; Shopify:
+tự xây brand) để LLM SO SÁNH thay vì pattern-match "POD = Etsy" theo bias huấn luyện, cấm rõ
+"không mặc định Etsy chỉ vì đó là platform hay được nhắc tới nhất cho POD". Thêm khối `COUNTRY
+REASONING`: việc chỉ có policy/trend snapshot cho US KHÔNG có nghĩa nước khác kém hơn — cho phép
+LLM gợi ý quốc gia khác dựa trên kiến thức chung, nhưng phải MINH BẠCH phần nào dựa trên data thật
+đã tiêm vs phần nào là kiến thức chung (không được ngụ ý có data local đã verify khi không có).
+
+Verify THẬT (3 lượt gọi, cùng ngữ cảnh), so sánh niche cố ý khác nhau:
+| Input | top_platform_suggestion | Ghi chú |
+|---|---|---|
+| `nurse_medical` + `typography_quote`, US | `etsy` | Đúng — niche personalization/gift cao, lý do trích đúng tiêu chí đã tiêm |
+| `gym_fitness` + `typography_quote`, US | **`amazon`** | Đổi hẳn khỏi Etsy — niche mass-market/keyword-search điển hình, reasoning trích "khả năng khám phá qua tìm kiếm từ khóa" đúng tiêu chí Amazon |
+| `gaming_esports` + `retro_90s`, target=JP, platform đã chọn=`tiktok` | `etsy` (US) | `selected_platform_suitable: false` cho TikTok+JP kèm lý do riêng — đúng cơ chế thẩm định độc lập; `rationale` tự nêu rõ "không có policy snapshot cho JP" (minh bạch, không giả vờ có data) |
+
+Kết luận: bias không biến mất hoàn toàn (LLM vẫn có thể chọn Etsy cho case biên — gaming/retro có
+thể lập luận theo hướng "vintage collectible" hợp lý), nhưng đã CÓ so sánh thật dựa trên tiêu chí
+cụ thể thay vì mặc định — case mass-market rõ ràng (gym_fitness) đã đổi đúng hướng sang Amazon.
+Threshold này là điểm khởi đầu, nên tiếp tục theo dõi tỉ lệ thật khi có nhiều test case đa dạng hơn
+(đúng tinh thần CLAUDE.md mục 9.1 — số khởi điểm, cần tune lại bằng dữ liệu thật).
+
+## 11. `sub_niche` + candidate `fonts`/`artworks` + BLOCKED-không-cần-database mở rộng (2026-08-22)
+
+**`sub_niche`** — trường mới trong output Agent 1, xuất hiện ở MỌI tầng: `Agent1ClassifyResult`/
+`DesignComplianceResult` (schemas.py), `orchestrator.py` return dict, `csv_batch.py`
+`BATCH_OUTPUT_COLUMNS`/`batch_row_to_csv_dict` (cột `sub_niche` ngay sau `niche`), và
+`frontend-react` (`types.ts` + `ResultCard.tsx` meta-grid). Đúng field `expected_sub_niche` đã
+có sẵn trong file mẫu THẬT của BGK (`design_samples_template.xlsx`, xem `csv_batch.py` mục
+`_EXPECTED_COLUMN_ALIASES`) — trước đây field input-side grading đã đọc được nhưng pipeline
+KHÔNG hề sinh ra `sub_niche` thật để so sánh, giờ đã có. `niche_taxonomy.json` bổ sung
+`sub_niches` (list ví dụ) cho từng niche, tiêm vào prompt Agent 1 dạng phẳng — cùng nguyên tắc
+"not exhaustive" như niche/style, Agent 1 KHÔNG bị giới hạn chỉ trong danh sách.
+
+**`suspected_fonts` + `suspected_artworks`** — 2 candidate-category MỚI, cùng pattern hoàn
+chỉnh với logo/character/celebrity: Agent 1 candidate-generate (`_get_text_reference()` tiêm
+nguyên văn `font_watchlist.md`/`artwork_list.md` — đã dịch sang tiếng Anh, đúng nguyên tắc mục
+10) → Agent 2 TASK 1 verify present/absent + reasoning (gộp CHUNG 1 lần gọi LLM với logo/
+character/celebrity, không tốn thêm API call) → `black_box.py::score_font_identity()`/
+`score_artwork_identity()` quyết định verdict. 2 category threshold MỚI: `font_risk`,
+`artwork_similarity` (`{"blocked_min": 85, "risky_min": 60}`).
+
+**Chính sách MỚI, áp dụng ĐỒNG NHẤT cho `logo_similarity`/`character_similarity`/`font_risk`/
+`artwork_similarity`**: trước đây tên KHÔNG có trong danh sách tham chiếu (`logo_refs/
+manifest.json`/`character_list.md`) LUÔN bị `_UNLISTED_NAME_SCORE_CAP` (75) chặn cứng, không
+bao giờ đạt `BLOCKED` được (`character_similarity` blocked_min=88, `logo_similarity`
+blocked_min=82 — 75 luôn ở dưới). Giờ cap CHỈ áp dụng khi Agent 2 KHÔNG xác nhận+giải thích —
+nếu Agent 2 (TASK 1) xác nhận `present=true` KÈM `reasoning` không rỗng, cap được BỎ, cho phép
+đạt `BLOCKED` dù chưa có trong database tham chiếu (`_apply_verification_filter()` gắn
+`_agent2_reasoning` vào entry, `_score_name_cross_reference()` đọc field này để quyết định bỏ
+cap). Đây là chính sách **"LLM có quyền BLOCKED nếu nghi ngờ cao và giải thích được kĩ, dù chưa
+có database"** — mirror đúng `score_trademark_text_llm_sense()` đã có từ trước, giờ mở rộng
+sang cả logo/character/font/artwork. `font_risk`/`artwork_similarity` không có `ref_names` thật
+(2 file .md nguồn là prose, không phải name list sạch) nên LUÔN coi là "unlisted" — verdict phụ
+thuộc HOÀN TOÀN vào cơ chế reasoning này (không Agent 2 xác nhận -> tối đa `RISKY`, "nên kiểm
+tra qua"; có xác nhận đủ thuyết phục -> có thể `BLOCKED`).
+
+Verify THẬT end-to-end (API key thật, `Gen.G-banner.jpg` — banner có nhiều logo tài trợ thật):
+```
+suspected_logos: LG UltraGear (high), Monster Energy (high), Logitech G (high), ...
+suspected_fonts: "bold italic sans-serif (esports/gaming style)" (medium), "geometric sans-serif" (low)
+suspected_artworks: "League of Legends LCH 2025 Championship official key art..." (high)
+
+→ Agent 2 xác nhận present=true CHO CẢ 5 mục, kèm reasoning chi tiết
+→ evidence:
+   logo_similarity: BLOCKED (92) — "CHƯA có trong danh sách đối chiếu — Agent 2 tự xác nhận: ... khuyến nghị kiểm chứng thủ công"
+   font_risk: RISKY (72) — confidence gốc "medium" nên KHÔNG đủ vượt blocked_min=85 dù đã bỏ cap (đúng thiết kế — bỏ cap không tự động BLOCKED, vẫn phụ thuộc confidence thật)
+   artwork_similarity: BLOCKED (92) — confidence gốc "high" + reasoning chi tiết
+final_verdict: BLOCKED, reasoning + fix_suggestions (Agent 3) tự động bao phủ ĐỦ 4 category (kể cả 2 category mới, không cần sửa gì Agent 3 — evidence dict generic)
+```
+Xác nhận: bỏ cap KHÔNG đồng nghĩa tự động BLOCKED — vẫn phụ thuộc confidence gốc (low/medium/high)
+của Agent 1 + Agent 2 xác nhận, đúng tinh thần "Python quyết định số/threshold cứng" (CLAUDE.md
+mục 10), chỉ LOẠI BỎ giới hạn nhân tạo trước đây (KHÔNG BAO GIỜ được BLOCKED nếu unlisted).
+
+## 12. Tích hợp YOLOv8n (best.onnx) + nối lại RapidOCR + sắp xếp data file (2026-08-22)
+
+Theo yêu cầu rõ ràng của người dùng: "không quan tâm RAM/timeout nữa, tối ưu hết mức có thể" —
+2 nhánh OpenCV từng bị tắt/placeholder được BẬT LẠI THẬT trong `orchestrator.py`.
+
+**`match_logo()` — từ PLACEHOLDER sang THẬT (YOLOv8n ONNX)**: người dùng cung cấp
+`best.onnx`/`best.pt` — model do MỘT THÀNH VIÊN TRONG NHÓM tự huấn luyện bằng PyTorch/
+Ultralytics YOLOv8n, fine-tune riêng cho bài toán phát hiện logo. Metadata trong `best.onnx`
+xác nhận: input `640x640`, output `(1,5,8400)`, **chỉ 1 class duy nhất `"logo"`** — tức đây là
+1 bộ **phát hiện VÙNG** ("ở đâu trông như logo"), KHÔNG tự phân loại brand. Đã thêm
+`opencv_modules.py::detect_logo_regions()` (suy luận qua `cv2.dnn.readNetFromONNX`, decode thủ
+công theo đúng chuẩn xuất ONNX của Ultralytics — KHÔNG cần cài `torch`/`ultralytics` ở runtime,
+đúng định hướng CLAUDE.md mục 7). `match_logo()` viết lại: ghép TOP-N vùng phát hiện (sắp
+confidence giảm dần) với `suspected_logos` của Agent 1 (cũng đã ưu tiên confidence cao nhất)
+THEO THỨ TỰ — cách ghép hợp lý duy nhất khi model không tự nói tên brand. Model file đổi tên
+`best.onnx`/`best.pt` → `yolov8n_logo.onnx`/`yolov8n_logo.pt`, chuyển vào
+`compliance_checker/data/models/` (cùng chỗ `blaze_face_short_range.tflite`), khai báo đầy đủ
+`source`/`training`/`export_date` trong `models/manifest.json` (đúng nguyên tắc "không bịa data"
+— ghi rõ đây là model tự huấn luyện nội bộ, CHƯA qua benchmark chính thức, không phải số liệu
+nhà cung cấp công bố).
+
+**RapidOCR — nối lại vào `orchestrator.process_one_design()`**: `text_blocks = []` hardcode
+(do lo ngại OOM trên Render trước đây) được thay bằng lời gọi thật `extract_text_blocks()`,
+chạy CONCURRENT với Agent 1 (giống `face_crop_task`, không cộng dồn latency) qua
+`text_block_task`. 2 tác dụng: (1) `_build_flagged_regions()` giờ có bbox THẬT để khoanh vùng
+trademark-text trên ảnh gốc cho FE (trước đây luôn rỗng vì thiếu nguồn); (2) `trademark_source_text`
+giờ GHÉP CHUNG `classify["OCR_text"]` (Vision) + text đọc được từ RapidOCR — 2 nguồn OCR độc
+lập bù lỗi cho nhau trước khi đưa vào `resolve_trademark_phrases()` (Python match database) và
+Agent 2 TASK 3 (LLM sense-check). `detect_logo_regions()` cũng được kick off CONCURRENT với
+Agent 1 (`logo_region_task`) rồi truyền thẳng vào `match_logo()` qua tham số nội bộ
+`_precomputed_regions` — tránh chạy forward-pass ONNX 2 lần trên cùng 1 ảnh.
+
+**Sắp xếp data file**: `Policy.md` (18KB, gộp cả 4 platform) được TÁCH lại đúng theo cấu trúc
+đã có (`data/policies/{platform}_us.md`), nội dung RICHER hơn bản cũ (đủ 2-3 policy/platform +
+link nguồn chính thức Amazon/Etsy/Shopify/TikTok Shop Academy) — các file cũ ~1.5KB được thay
+bằng bản ~2.2-2.8KB/platform. `monthly_design_trends_2026.md` (37KB) + `world_festivals.md`
+(175KB) — 2 tài liệu nghiên cứu xu hướng/lịch lễ hội TOÀN CẦU theo tháng, có nguồn thật (WGSN,
+Pinterest Predicts, Etsy Marketplace Insights, TikTok/Reddit subculture tracking, tourism
+boards...) — được chuyển vào `data/trends/` (`monthly_design_trends_2026.md`,
+`world_festivals_calendar.md`) làm TÀI LIỆU THAM KHẢO BỔ SUNG, có ghi rõ `source`/`last_updated`/
+`scope`. ⚠️ CHỦ Ý CHƯA tự động tiêm 2 file này vào mọi prompt Agent 4 như `us_trends.md`
+(1.6KB) — 30-175KB mỗi request sẽ đội chi phí/latency LLM call lên rất nhiều lần cho MỌI design
+check, kể cả khi request không cần chiều sâu đó; giữ nguyên `us_trends.md` nhỏ gọn làm nguồn
+tiêm mặc định, 2 file lớn để tra cứu thủ công/mở rộng sau nếu cần. `best.onnx`/`best.pt` gốc +
+3 file `.md` gốc ở root đã XOÁ sau khi xác nhận nội dung đã chuyển đúng chỗ (không còn bản trùng
+lặp). Script/file test (`crop_face_blazeface.py`, `test_logo.py`, `download.py`, `test.py`) giữ
+nguyên ở root theo đúng yêu cầu — không phải data, không cần chuyển vào `compliance_checker/`.
+
+Verify THẬT end-to-end (API key thật, `Gen.G-banner.jpg`, sau khi đổi cả 2 nhánh cùng lúc):
+```
+detect_logo_regions(): 4 vùng phát hiện, confidence 30-50%, chạy 0.29s
+extract_text_blocks(): 1 block text đọc đúng "LCH2025 / CHAMPIONS / LG UltraGear / logitechG / YOUR.GG", chạy 3.44s
+detect_and_crop_faces(): vẫn hoạt động bình thường (5 mặt), không xung đột RAM/exception khi cả 3 model ONNX
+  (BlazeFace + YOLOv8n-logo + RapidOCR detect+classify+recognize) chạy CÙNG LÚC trong 1 request
+
+process_one_design() TOÀN BỘ pipeline (bao gồm cả 4 LLM call): 52.75s, verdict BLOCKED, warnings: []
+evidence: logo_similarity (BLOCKED, 92%) + trademark_text + font_risk + artwork_similarity
+fix_suggestions: đủ 4 mục, cụ thể, đúng field "violation" khớp evidence
+```
+Không có exception/warning nào phát sinh khi bật đồng thời cả 2 nhánh — xác nhận pipeline chạy
+được đầy đủ tính năng theo đúng yêu cầu "tối ưu hết mức có thể", đúng thiết kế fail-open/
+`return_exceptions=True` đã có sẵn nếu 1 trong các model gặp lỗi ở môi trường khác (vd thiếu RAM
+thật trên Render — quyết định RAM/latency thực tế lúc đó vẫn là của người dùng, không phải code).

@@ -2,8 +2,6 @@
 // api/routes.py + main.py /health). KHÔNG dùng thư viện HTTP ngoài (axios...) — fetch() thuần
 // đã đủ cho scope này, giữ bundle nhẹ.
 
-const STORAGE_KEY_BACKEND_URL = "bup02_backend_url";
-
 // (2026-08-21) Vite CÓ build step thật (khác frontend/ vanilla JS cũ — xem frontend/api/config.js
 // cho cách xử lý ở đó) — biến env tiền tố VITE_ được Vite tự inject vào import.meta.env lúc BUILD,
 // Vercel tự chạy `npm run build` cho project Vite nên cơ chế này hoạt động ngay, không cần
@@ -16,15 +14,20 @@ const VITE_BACKEND_URL = (
   ?.trim()
   .replace(/\/+$/, "");
 
+// (2026-08-22) BỎ localStorage — trước đây setBackendUrl() ghi đè xuống trình duyệt, sống sót
+// qua mọi lần deploy sau đó và ưu tiên cao hơn cả VITE_BACKEND_URL, nên mỗi lần push code mới
+// phải tự tay xoá cache/site data mới thấy đúng giá trị mới (gây nhầm lẫn suốt quá trình debug
+// deploy Vercel/Render). Giờ dùng biến in-memory: chỉ tồn tại trong phiên tab đang mở (gõ tay
+// để test 1 backend khác vẫn dùng được), reload/mở tab mới -> mất, tự quay về VITE_BACKEND_URL —
+// đúng nghĩa "mỗi lần mở là 1 lần load" từ build hiện tại, không còn giá trị cache cũ lẫn vào.
+let sessionOverrideUrl = "";
+
 export function getBackendUrl(): string {
-  const override = (localStorage.getItem(STORAGE_KEY_BACKEND_URL) || "")
-    .trim()
-    .replace(/\/+$/, "");
-  return override || VITE_BACKEND_URL || "http://localhost:8000";
+  return sessionOverrideUrl || VITE_BACKEND_URL || "http://localhost:8000";
 }
 
 export function setBackendUrl(url: string): void {
-  localStorage.setItem(STORAGE_KEY_BACKEND_URL, url.trim());
+  sessionOverrideUrl = url.trim().replace(/\/+$/, "");
 }
 
 class ApiError extends Error {

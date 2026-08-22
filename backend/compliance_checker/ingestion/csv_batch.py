@@ -210,7 +210,7 @@ def parse_batch_bytes(raw_bytes: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 BATCH_OUTPUT_COLUMNS = [
-    "row_index", "input_ref", "status", "niche", "style", "verdict",
+    "row_index", "input_ref", "status", "niche", "sub_niche", "style", "verdict",
     "confidence", "violation_categories", "violation_summary", "fix_suggestion_summary", "error",
     # 2 cột cuối CHỈ có giá trị khi input đi kèm cột "expected_verdict" (vd file mẫu BGK) —
     # rỗng cho batch input thường, không phá vỡ CSV/report cũ (xem orchestrator.process_batch).
@@ -229,7 +229,7 @@ def batch_row_to_csv_dict(row_result: dict) -> dict:
         "row_index": row_result.get("row_index"),
         "input_ref": row_result.get("input_ref"),
         "status": row_result.get("status"),
-        "niche": "", "style": "", "verdict": "", "confidence": "",
+        "niche": "", "sub_niche": "", "style": "", "verdict": "", "confidence": "",
         "violation_categories": "", "violation_summary": "", "fix_suggestion_summary": "",
         "error": row_result.get("error") or "",
         "expected_verdict": "", "verdict_match": "",
@@ -239,6 +239,7 @@ def batch_row_to_csv_dict(row_result: dict) -> dict:
         evidence = r.get("evidence", {})
         base.update({
             "niche": r.get("niche", ""),
+            "sub_niche": r.get("sub_niche", ""),
             "style": r.get("style", ""),
             "verdict": r.get("final_verdict", ""),
             "confidence": r.get("overall_confidence", ""),

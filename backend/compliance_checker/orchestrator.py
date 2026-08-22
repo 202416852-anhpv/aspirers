@@ -78,14 +78,18 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
     trước đây). THUẦN PYTHON, bbox_norm luôn lấy từ dữ liệu THẬT (text_blocks/detected_faces đã
     có toạ độ chính xác) — KHÔNG bao giờ để LLM tự đoán toạ độ.
 
-    3 nguồn gộp chung:
+    2 nguồn gộp chung:
     1. trademark_flags (Python match database THẬT, static/live — KHÔNG đổi) — tìm block chứa
        đúng phrase đã match (substring, case-insensitive) để lấy bbox; không tìm được thì bỏ
-       qua (KHÔNG đoán bbox — thà thiếu box còn hơn box sai).
-    2. text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) — dùng thẳng block_indexes Agent
-       2 đã trả về, khớp với text_blocks theo đúng index đã gửi.
-    3. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
+       qua (KHÔNG đoán bbox — thà thiếu box còn hơn box sai). text_blocks đến từ
+       extract_text_blocks() (RapidOCR, 2026-08-22 NỐI LẠI — xem orchestrator.process_one_design).
+    2. detected_faces đã merge (Agent 2 TASK 2) — CHỈ mục có suspected_name (bỏ qua mặt không
        nhận diện được, tránh khoanh vùng những mặt vô hại).
+
+    text_trademark_flags (Agent 2 TASK 3, "cảm nhận" riêng) KHÔNG còn góp bbox ở đây nữa — từ
+    khi TASK 3 chuyển sang dùng OCR_text thô (agents.py::run_agent2_verify_candidates, không còn
+    text_blocks có index/bbox), Agent 2 không còn cách nào trỏ về toạ độ cụ thể. Vẫn ảnh hưởng
+    verdict/reasoning bình thường qua black_box.py, chỉ KHÔNG khoanh được vùng trên ảnh gốc nữa.
     """
     out = []
     for f in trademark_flags or []:
@@ -102,16 +106,6 @@ def _build_flagged_regions(text_blocks: list, trademark_flags: list, text_tradem
                     "detail": "Trùng khớp database" + (f" (chủ sở hữu: {f.get('owner')})" if f.get("owner") else ""),
                 })
                 break  # 1 block khớp đầu tiên là đủ, tránh box trùng lặp cho cùng 1 phrase
-
-    for flag in text_trademark_flags or []:
-        for idx in flag.get("block_indexes") or []:
-            if isinstance(idx, int) and 0 <= idx < len(text_blocks or []):
-                out.append({
-                    "kind": "text",
-                    "bbox_norm": text_blocks[idx]["bbox_norm"],
-                    "label": flag.get("phrase", ""),
-                    "detail": flag.get("reasoning", ""),
-                })
 
     for face in detected_faces or []:
         if face.get("suspected_name"):
@@ -219,11 +213,15 @@ async def process_one_design(
 
     try:
         # ---- Call 1: Agent 1 Classify (TUẦN TỰ bắt buộc — Call 2 cần niche/OCR từ đây) ----
-        # detect_and_crop_faces (BlazeFace) + extract_text_blocks (RapidOCR, 2026-08-21):
-        # KHÔNG phụ thuộc classify (chỉ cần local_path, đã có sẵn) -> kick off CONCURRENT với
-        # Agent 1 để không cộng dồn latency (xong trước khi Agent 2/trademark cần tới, bên dưới).
+        # detect_and_crop_faces (BlazeFace) + extract_text_blocks (RapidOCR) + detect_logo_regions
+        # (YOLOv8n ONNX, 2026-08-22 MỚI): CẢ 3 đều KHÔNG phụ thuộc classify (chỉ cần local_path,
+        # đã có sẵn) -> kick off CONCURRENT với Agent 1 để không cộng dồn latency (xong trước khi
+        # Agent 2/match_logo cần tới, bên dưới).
+        # ⚠️ (2026-08-22) RapidOCR từng bị RÚT khỏi flow (nghi tốn RAM, xem docs.md) — NỐI LẠI
+        # theo yêu cầu người dùng ("không quan tâm RAM/timeout nữa, tối ưu hết mức có thể").
         face_crop_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_and_crop_faces, local_path))
-        text_blocks_task = asyncio.create_task(asyncio.to_thread(cc_opencv.extract_text_blocks, local_path))
+        text_block_task = asyncio.create_task(asyncio.to_thread(cc_opencv.extract_text_blocks, local_path))
+        logo_region_task = asyncio.create_task(asyncio.to_thread(cc_opencv.detect_logo_regions, local_path))
         classify = await asyncio.to_thread(cc_agents.run_agent1_classify, vision_images)
 
         if pdf_meta and pdf_meta.get("pdf_type") == "digital_native" and pdf_meta.get("all_pages_native_text"):
@@ -245,33 +243,48 @@ async def process_one_design(
             "logos": classify["suspected_logos"],
             "characters": classify["suspected_characters"],
             "celebrities": classify["suspected_celebrities"],
+            "fonts": classify["suspected_fonts"],
+            "artworks": classify["suspected_artworks"],
         }
-        # face_crop_task/text_blocks_task đã chạy song song từ lúc classify bắt đầu — await ở
-        # đây để lấy dữ liệu THẬT (crop mặt/text OCR) truyền cho Agent 2 + trademark_resolver.
-        # Lỗi ở 2 nhánh này KHÔNG được làm sập cả design (fail-open, giống mọi nhánh khác).
+        # face_crop_task đã chạy song song từ lúc classify bắt đầu — await ở đây để lấy dữ
+        # liệu THẬT (crop mặt) truyền cho Agent 2. Lỗi ở nhánh này KHÔNG được làm sập cả design
+        # (fail-open, giống mọi nhánh khác).
         try:
             face_crops_result = await face_crop_task
         except Exception as e:
             face_crops_result = e
         face_crops_result = _safe_or_default(face_crops_result, {"faces": []}, "detect_and_crop_faces", warnings)
 
+        # text_blocks: extract_text_blocks (RapidOCR, 2026-08-22 NỐI LẠI) — dùng cho
+        # _build_flagged_regions() (khoanh vùng bbox THẬT cho FE, xem docstring hàm đó).
         try:
-            text_blocks_result = await text_blocks_task
+            text_blocks_result = await text_block_task
         except Exception as e:
             text_blocks_result = e
         text_blocks_result = _safe_or_default(text_blocks_result, {"text_blocks": []}, "extract_text_blocks", warnings)
         text_blocks = text_blocks_result["text_blocks"]
 
-        # Trademark matching (Python, database THẬT) giờ ưu tiên dùng text OCR từ OpenCV
-        # (RapidOCR, extract_text_blocks — đọc chính xác hơn + có bbox thật cho từng cụm chữ)
-        # thay vì OCR_text của Vision (Agent 1) — chỉ fallback về Vision khi OpenCV không đọc
-        # được chữ nào (vd model rapidocr chưa cài, hoặc ảnh không có chữ dạng OpenCV nhận ra).
-        ocr_block_text = "\n".join(b["text"] for b in text_blocks) if text_blocks else ""
-        trademark_source_text = ocr_block_text or classify["OCR_text"]
+        # logo_regions: detect_logo_regions (YOLOv8n ONNX, 2026-08-22 MỚI) — chạy song song Agent 1
+        # để tránh forward-pass ONNX 2 lần (truyền thẳng vào match_logo() bên dưới qua
+        # _precomputed_regions, xem opencv_modules.py::match_logo).
+        try:
+            logo_regions_result = await logo_region_task
+        except Exception as e:
+            logo_regions_result = e
+        logo_regions_result = _safe_or_default(logo_regions_result, {"logo_regions": []}, "detect_logo_regions", warnings)
+
+        # Trademark matching (Python, database THẬT) — gộp Vision OCR (Agent 1, đọc được text
+        # trong bối cảnh hình ảnh/màu sắc/kiểu chữ) VỚI RapidOCR (đọc chữ chính xác theo pixel,
+        # không "diễn giải" như Vision) -> tối đa hoá khả năng bắt được trademark, 2 nguồn OCR
+        # độc lập bù lỗi cho nhau (Vision có thể tự sửa lỗi chính tả/thiếu chữ nhỏ, RapidOCR có
+        # thể đọc đúng những chữ Vision bỏ sót hoặc ngược lại). Trùng lặp không sao vì bước sau
+        # chỉ substring-match trên database, không phạt vì lặp.
+        rapidocr_text = "\n".join(b["text"] for b in text_blocks if b.get("text"))
+        trademark_source_text = "\n".join(t for t in (classify["OCR_text"], rapidocr_text) if t.strip())
 
         agent2_result, logo_match, char_match, trademark_flags, market = await asyncio.gather(
-            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], text_blocks),
-            asyncio.to_thread(cc_opencv.match_logo, local_path, {"suspected_logos": classify["suspected_logos"]}),
+            asyncio.to_thread(cc_agents.run_agent2_verify_candidates, vision_images, candidates_for_verify, face_crops_result["faces"], trademark_source_text),
+            asyncio.to_thread(cc_opencv.match_logo, local_path, {"suspected_logos": classify["suspected_logos"]}, logo_regions_result["logo_regions"]),
             asyncio.to_thread(cc_opencv.match_character, local_path),
             cc_trademark.resolve_trademark_phrases(trademark_source_text, niche),
             asyncio.to_thread(cc_agents.run_agent4_market_suggestion, niche, classify["style"], target_country, platform),
@@ -306,6 +319,8 @@ async def process_one_design(
             agent2_verifications=agent2_result["verifications"],
             face_identifications=agent2_result["face_identifications"],
             text_trademark_flags=agent2_result["text_trademark_flags"],
+            suspected_fonts=classify["suspected_fonts"],
+            suspected_artworks=classify["suspected_artworks"],
         )
 
         # ---- Nhóm C: tổng hợp + định vị (1 LLM call) ----
@@ -313,6 +328,8 @@ async def process_one_design(
             "suspected_logos": classify["suspected_logos"],
             "suspected_characters": classify["suspected_characters"],
             "suspected_celebrities": classify["suspected_celebrities"],
+            "suspected_fonts": classify["suspected_fonts"],
+            "suspected_artworks": classify["suspected_artworks"],
             "agent2_verifications": agent2_result["verifications"],
             "text_trademark_flags": agent2_result["text_trademark_flags"],
             "logo_match": logo_match, "char_match": char_match,
@@ -335,12 +352,15 @@ async def process_one_design(
 
         return {
             "niche": niche,
+            "sub_niche": classify["sub_niche"],
             "style": classify["style"],
             "motifs": classify["motifs"],
             "OCR_text": classify["OCR_text"],
             "suspected_logos": classify["suspected_logos"],
             "suspected_characters": classify["suspected_characters"],
             "suspected_celebrities": classify["suspected_celebrities"],
+            "suspected_fonts": classify["suspected_fonts"],
+            "suspected_artworks": classify["suspected_artworks"],
             "verifications": agent2_result["verifications"],
             "final_verdict": black_box_result["final_verdict"],
             "overall_confidence": black_box_result["overall_confidence"],

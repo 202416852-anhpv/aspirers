@@ -37,8 +37,21 @@ class SuspectedCelebrity(BaseModel):
     confidence: Confidence = Field(...)
 
 
+class SuspectedFont(BaseModel):
+    """(2026-08-22, MỚI) Cùng pattern candidate-generation với SuspectedLogo/Character/Celebrity."""
+    font_name_guess: str = Field(..., description="Tên font cụ thể NẾU rất đặc trưng, ngược lại mô tả kiểu chữ chung (vd 'bold condensed sans-serif')")
+    confidence: Confidence = Field(...)
+
+
+class SuspectedArtwork(BaseModel):
+    """(2026-08-22, MỚI) Cùng pattern candidate-generation với SuspectedLogo/Character/Celebrity."""
+    artwork_name: str = Field(..., description="Tên tác phẩm/franchise nghi ngờ (vd 'Studio Ghibli movie poster style')")
+    confidence: Confidence = Field(...)
+
+
 class Agent1ClassifyResult(BaseModel):
     niche: str = Field(..., description="Niche chính detect được — KHÔNG giới hạn trong niche_taxonomy.json")
+    sub_niche: str = Field(default="", description="(2026-08-22) Niche con cụ thể hơn trong niche chính (vd niche='christmas_holiday' -> sub_niche='ugly_christmas_sweater') — KHÔNG giới hạn trong niche_taxonomy.json, giống niche")
     style: str = Field(..., description="Style/phong cách thiết kế")
     motifs: List[str] = Field(default_factory=list, description="Chủ đề phụ/motif phát hiện được (kể cả global_dangerous_motifs)")
     OCR_text: str = Field(default="", description="Toàn bộ text OCR được bởi Vision (không dùng Tesseract/PaddleOCR)")
@@ -50,6 +63,14 @@ class Agent1ClassifyResult(BaseModel):
     suspected_celebrities: List[SuspectedCelebrity] = Field(
         default_factory=list,
         description="(2026-08-21) TOP 5 người nổi tiếng nghi ngờ — CHUYỂN từ Agent 2 sang đây, tương tự suspected_characters."
+    )
+    suspected_fonts: List[SuspectedFont] = Field(
+        default_factory=list,
+        description="(2026-08-22, MỚI) TOP 5 font thương mại/gắn thương hiệu nghi ngờ — cùng pattern candidate-generation, Agent 2 verify lại."
+    )
+    suspected_artworks: List[SuspectedArtwork] = Field(
+        default_factory=list,
+        description="(2026-08-22, MỚI) TOP 5 tác phẩm/franchise có bản quyền nghi ngờ — cùng pattern candidate-generation, Agent 2 verify lại."
     )
     text_source: Literal["vision_ocr", "pdf_native"] = Field(
         default="vision_ocr",
@@ -68,10 +89,13 @@ class Agent1ClassifyResult(BaseModel):
 # ::_apply_verification_filter() và frontend/app.js (chỉ hiện ✅/❌, không hiện số).
 
 class VerificationItem(BaseModel):
-    category: Literal["logo", "character", "celebrity"]
-    name: str = Field(..., description="Echo lại ĐÚNG tên candidate Agent 1 đã nêu (brand_name/name)")
+    category: Literal["logo", "character", "celebrity", "font", "artwork"]
+    name: str = Field(..., description="Echo lại ĐÚNG tên candidate Agent 1 đã nêu (brand_name/name/font_name_guess/artwork_name)")
     present: bool = Field(..., description="Agent 2 xác nhận: mục này CÓ THẬT SỰ xuất hiện trong ảnh hay không — quyết định nhị phân, KHÔNG phải điểm số")
-    reasoning: str = Field(default="", description="1 câu giải thích ngắn cho phán đoán trực quan")
+    reasoning: str = Field(
+        default="",
+        description="Giải thích cho phán đoán trực quan — (2026-08-22) nếu present=true và Agent 2 tin đây là vi phạm thật dù chưa chắc có trong database tham chiếu, reasoning PHẢI đủ chi tiết để black_box.py dùng làm căn cứ BLOCKED không cần database (xem black_box.py::_score_name_cross_reference)."
+    )
 
 
 # (2026-08-21) FACE IDENTIFICATION — nhánh MỚI, độc lập với verifications ở trên. Ảnh mặt do
@@ -280,12 +304,15 @@ class DesignComplianceResult(BaseModel):
     breakdown + reasoning + fix suggestions).
     """
     niche: str = ""
+    sub_niche: str = Field(default="", description="(2026-08-22) Niche con cụ thể hơn — xem Agent1ClassifyResult.sub_niche")
     style: str = ""
     motifs: List[str] = Field(default_factory=list)
     OCR_text: str = ""
     suspected_logos: List[SuspectedLogo] = Field(default_factory=list)
     suspected_characters: List[SuspectedCharacter] = Field(default_factory=list)
     suspected_celebrities: List[SuspectedCelebrity] = Field(default_factory=list)
+    suspected_fonts: List[SuspectedFont] = Field(default_factory=list, description="(2026-08-22, MỚI)")
+    suspected_artworks: List[SuspectedArtwork] = Field(default_factory=list, description="(2026-08-22, MỚI)")
     verifications: List[VerificationItem] = Field(
         default_factory=list,
         description="(2026-08-21) Kết quả Agent 2 verify từng candidate ở trên — present true/false, "
