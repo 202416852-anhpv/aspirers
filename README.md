@@ -1,4 +1,8 @@
 # 🛡️ BUP-02 — AI Design Compliance Checker
+## Git Workflow
+
+- **`dev`** — nhánh phát triển chính
+- **`main`** — nhánh production
 
 **Hệ thống kiểm duyệt bản quyền/thương hiệu tự động cho ảnh thiết kế Print-on-Demand** — phát hiện logo, nhân vật, người nổi tiếng, trademark text, artwork và font có bản quyền trong 1 ảnh design, ra quyết định **SAFE / RISKY / BLOCKED** kèm lý do cụ thể, gợi ý cách sửa, và đề xuất thị trường/platform phù hợp — trước khi seller đăng bán và bị gỡ listing hoặc khoá tài khoản.
 
